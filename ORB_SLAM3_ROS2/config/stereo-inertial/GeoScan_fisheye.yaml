@@ -1,0 +1,99 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters (Kalibr pinhole-equi, 2026-03-13)
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "KannalaBrandt8"
+
+# Left camera (cam0)
+Camera1.fx: 465.30269231092973
+Camera1.fy: 464.44407907099975
+Camera1.cx: 646.2240734070592
+Camera1.cy: 486.9358630691829
+Camera1.k1: -0.0313464513145838
+Camera1.k2: 0.03307070111936863
+Camera1.k3: -0.03358616295118505
+Camera1.k4: 0.010940367109062672
+
+# Right camera (cam1)
+Camera2.fx: 462.6532257342507
+Camera2.fy: 461.95322655028104
+Camera2.cx: 622.1567016653636
+Camera2.cy: 541.5480235419994
+Camera2.k1: 0.017052626877708536
+Camera2.k2: -0.08393575674877075
+Camera2.k3: 0.07290533443221045
+Camera2.k4: -0.02151514779076789
+
+# Transformation from right (cam1) to left (cam0) = inv(T_cn_cnm1)
+Stereo.T_c1_c2: !!opencv-matrix
+  rows: 4
+  cols: 4
+  dt: f
+  data: [ 0.9999993646608237,  0.0006966731236039661,  0.000886185369695735,  0.09738513291064156,
+         -0.0007079273217501893, 0.9999182948742128,   0.012763323029516879, -0.00001645203060468668,
+         -0.0008772210996860926,-0.012763942275313071, 0.9999181527808847,    0.0008682044586305372,
+          0.0, 0.0, 0.0, 1.0]
+
+Camera1.overlappingBegin: 0
+Camera1.overlappingEnd: 1279
+Camera2.overlappingBegin: 0
+Camera2.overlappingEnd: 1279
+
+Camera.width: 1280
+Camera.height: 1024
+
+Camera.fps: 10
+
+Camera.RGB: 1
+
+Stereo.ThDepth: 100.0
+
+# Atlas persistence (saved on Shutdown / Ctrl+C)
+System.SaveAtlasToFile: "GeoScan_B1"
+# To reuse the saved map next run, uncomment this and comment SaveAtlasToFile:
+# System.LoadAtlasFromFile: "GeoScan_B1"
+
+#--------------------------------------------------------------------------------------------
+# IMU Parameters (FB100, datasheet x3)
+#--------------------------------------------------------------------------------------------
+# Transformation from body (IMU) to left camera = inv(T_cam_imu) from Kalibr
+IMU.T_b_c1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [-0.019273558283439,  0.003520396969720,  0.999808049955725,  0.054593,
+          -0.999799655677629, -0.005470541069210, -0.019254134291191,  0.049000,
+           0.005401708802597, -0.999978839768915,  0.003625128470314,  0.014000,
+           0.0, 0.0, 0.0, 1.0]
+
+IMU.NoiseGyro: 0.000561
+IMU.NoiseAcc:  0.00558
+IMU.GyroWalk:  0.0000798
+IMU.AccWalk:   0.00130
+IMU.Frequency: 800.0
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+ORBextractor.nFeatures: 2500
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 10
+ORBextractor.minThFAST: 3
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -3.5
+Viewer.ViewpointF: 500.0

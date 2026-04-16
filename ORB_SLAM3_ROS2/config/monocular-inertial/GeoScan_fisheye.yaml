@@ -1,0 +1,65 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters (left camera, from Kalibr pinhole-equi calibration 2026-03-13)
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "KannalaBrandt8"
+
+Camera1.fx: 465.30269231092973
+Camera1.fy: 464.44407907099975
+Camera1.cx: 646.2240734070592
+Camera1.cy: 486.9358630691829
+
+Camera1.k1: -0.0313464513145838
+Camera1.k2: 0.03307070111936863
+Camera1.k3: -0.03358616295118505
+Camera1.k4: 0.010940367109062672
+
+Camera.width: 1280
+Camera.height: 1024
+
+Camera.fps: 10
+
+Camera.RGB: 1
+
+# Transformation from body-frame (imu) to camera (= inv(T_cam_imu) from Kalibr)
+IMU.T_b_c1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [-0.019273558283439,  0.003520396969720,  0.999808049955725,  0.054593,
+          -0.999799655677629, -0.005470541069210, -0.019254134291191,  0.049000,
+           0.005401708802597, -0.999978839768915,  0.003625128470314,  0.014000,
+           0.0, 0.0, 0.0, 1.0]
+
+# IMU noise (FB100, datasheet x3)
+IMU.NoiseGyro: 0.000561
+IMU.NoiseAcc:  0.00558
+IMU.GyroWalk:  0.0000798
+IMU.AccWalk:   0.00130
+IMU.Frequency: 800.0
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+ORBextractor.nFeatures: 2500
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 10
+ORBextractor.minThFAST: 3
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -3.5
+Viewer.ViewpointF: 500.0

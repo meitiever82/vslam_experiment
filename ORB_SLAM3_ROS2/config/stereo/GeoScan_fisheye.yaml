@@ -1,0 +1,115 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters (from Kalibr pinhole-equi calibration 2026-03-13)
+#--------------------------------------------------------------------------------------------
+Camera.type: "KannalaBrandt8"
+
+# Left Camera (cam0) calibration parameters
+Camera.fx: 465.30269231092973
+Camera.fy: 464.44407907099975
+Camera.cx: 646.2240734070592
+Camera.cy: 486.9358630691829
+
+# Kannala-Brandt distortion parameters (equidistant from Kalibr)
+Camera.k1: -0.0313464513145838
+Camera.k2: 0.03307070111936863
+Camera.k3: -0.03358616295118505
+Camera.k4: 0.010940367109062672
+
+# Right Camera (cam1) calibration parameters
+Camera2.fx: 462.6532257342507
+Camera2.fy: 461.95322655028104
+Camera2.cx: 622.1567016653636
+Camera2.cy: 541.5480235419994
+
+# Kannala-Brandt distortion parameters
+Camera2.k1: 0.017052626877708536
+Camera2.k2: -0.08393575674877075
+Camera2.k3: 0.07290533443221045
+Camera2.k4: -0.02151514779076789
+
+# Transformation from right camera to left camera (T_cam0_cam1)
+# Computed as inverse of T_cn_cnm1 (T_cam1_cam0) from Kalibr
+Tlr: !!opencv-matrix
+  rows: 3
+  cols: 4
+  dt: f
+  data: [ 0.9999993646608237, 0.0006966731236039661, 0.000886185369695735, 0.09738513291064156,
+         -0.0007079273217501893, 0.9999182948742128, 0.012763323029516879, -0.00001645203060468668,
+         -0.0008772210996860926, -0.012763942275313071, 0.9999181527808847, 0.0008682044586305372]
+
+# Lapping area between images (full overlap for forward-facing stereo)
+Camera.lappingBegin: 0
+Camera.lappingEnd: 1279
+
+Camera2.lappingBegin: 0
+Camera2.lappingEnd: 1279
+
+# Camera resolution
+Camera.width: 1280
+Camera.height: 1024
+
+# Camera frames per second
+Camera.fps: 10.0
+
+# Color order of the images (0: BGR, 1: RGB)
+Camera.RGB: 1
+
+# Close/Far threshold. Baseline times.
+ThDepth: 40.0
+
+# stereo baseline times fx
+Camera.bf: 45.31
+
+# Transformation from body-frame (imu) to left camera
+# = body_T_cam0 (T_imu_cam0), rotation from Kalibr equi, translation from 3D CAD model
+Tbc: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [-0.019273558283439, 0.003520396969720, 0.999808049955725, 0.0545,
+          -0.999799655677629, -0.005470541069210, -0.019254134291191, 0.0490,
+           0.005401708802597, -0.999978839768915, 0.003625128470314, 0.0140,
+           0.0, 0.0, 0.0, 1.0]
+
+# IMU noise (FB100, values x3 from datasheet for robustness)
+IMU.NoiseGyro: 0.000561       # gyroscope noise density [rad/s/sqrt(Hz)]
+IMU.NoiseAcc: 0.00558         # accelerometer noise density [m/s^2/sqrt(Hz)]
+IMU.GyroWalk: 0.0000798       # gyroscope random walk [rad/s^1.5]
+IMU.AccWalk: 0.00130           # accelerometer random walk [m/s^2.5]
+IMU.Frequency: 800
+
+# IMU acceleration scale (FB100 outputs in g, multiply by 9.81 to get m/s^2)
+IMU.AccScale: 9.81
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+
+# ORB Extractor: Number of features per image (increased for 1280x1024 @ 10fps)
+ORBextractor.nFeatures: 2000
+
+# ORB Extractor: Scale factor between levels in the scale pyramid
+ORBextractor.scaleFactor: 1.2
+
+# ORB Extractor: Number of levels in the scale pyramid
+ORBextractor.nLevels: 8
+
+# ORB Extractor: Fast threshold (lowered for better tracking at 10fps)
+ORBextractor.iniThFAST: 15
+ORBextractor.minThFAST: 5
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -3.5
+Viewer.ViewpointF: 500

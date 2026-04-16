@@ -1,0 +1,137 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters (from Kalibr calibration - shmk dataset)
+# Resolution: 3840 x 2160 (4K)
+#--------------------------------------------------------------------------------------------
+Camera.type: "PinHole"
+
+# Camera calibration parameters after stereo rectification
+# Using left camera intrinsics from kalibr_imucam_chain.yaml
+Camera.fx: 3772.5478491326
+Camera.fy: 3772.2013966987
+Camera.cx: 1935.7812437147
+Camera.cy: 1076.5369245378
+
+# After rectification, distortion is zero
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+
+# Camera resolution (4K)
+Camera.width: 3840
+Camera.height: 2160
+
+# Camera frames per second
+Camera.fps: 21.0
+
+# stereo baseline times fx
+# baseline = 0.0488 - (-0.0358) = 0.0846 m (from T_imu_cam translations)
+# bf = baseline * fx = 0.0846 * 3772.5478 = 319.16
+Camera.bf: 319.16
+
+# Color order of the images (0: BGR, 1: RGB)
+Camera.RGB: 1
+
+# Close/Far threshold. Baseline times.
+ThDepth: 40.0
+
+# Transformation from camera 0 (left) to body-frame (imu)
+# Tbc = inv(T_imu_cam) from kalibr_imucam_chain.yaml
+# Orthogonalized rotation matrix to ensure SO(3) validity
+Tbc: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [0.99735372, -0.00828567, 0.07222816, -0.04914169,
+          0.07216567, -0.00760840, -0.99736364, 0.00987392,
+          0.00881337, 0.99993673, -0.00699033, -0.05683564,
+          0.0, 0.0, 0.0, 1.0]
+
+# IMU noise (from kalibr_imu_chain.yaml)
+IMU.NoiseGyro: 1.1715402862306967e-03      # gyroscope_noise_density rad/s/sqrt(Hz)
+IMU.NoiseAcc: 6.0754827067502652e-03       # accelerometer_noise_density m/s^2/sqrt(Hz)
+IMU.GyroWalk: 1.6573869868328646e-05       # gyroscope_random_walk rad/s^2/sqrt(Hz)
+IMU.AccWalk: 1.8675887779620210e-04        # accelerometer_random_walk m/s^3/sqrt(Hz)
+IMU.Frequency: 100                          # IMU update rate (must be integer)
+
+#--------------------------------------------------------------------------------------------
+# Stereo Rectification Parameters
+# Pre-rectification matrices from Kalibr calibration
+#--------------------------------------------------------------------------------------------
+LEFT.height: 2160
+LEFT.width: 3840
+LEFT.D: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [-0.018340811, 0.000395907, -0.0000915535, -0.0011332931, 0.0]
+LEFT.K: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [3772.5478491326, 0.0, 1935.7812437147, 0.0, 3772.2013966987, 1076.5369245378, 0.0, 0.0, 1.0]
+LEFT.R: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+LEFT.P: !!opencv-matrix
+   rows: 3
+   cols: 4
+   dt: d
+   data: [3772.5478491326, 0.0, 1935.7812437147, 0.0, 0.0, 3772.2013966987, 1076.5369245378, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+RIGHT.height: 2160
+RIGHT.width: 3840
+RIGHT.D: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [-0.018340811, 0.000395907, -0.0000915535, -0.0011332931, 0.0]
+RIGHT.K: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [3772.5478491326, 0.0, 1935.7812437147, 0.0, 3772.2013966987, 1076.5369245378, 0.0, 0.0, 1.0]
+RIGHT.R: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+RIGHT.P: !!opencv-matrix
+   rows: 3
+   cols: 4
+   dt: d
+   data: [3772.5478491326, 0.0, 1935.7812437147, -319.16, 0.0, 3772.2013966987, 1076.5369245378, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+# ORB Extractor: Number of features per image (increased for 4K resolution)
+ORBextractor.nFeatures: 2000
+
+# ORB Extractor: Scale factor between levels in the scale pyramid
+ORBextractor.scaleFactor: 1.2
+
+# ORB Extractor: Number of levels in the scale pyramid
+ORBextractor.nLevels: 8
+
+# ORB Extractor: Fast threshold
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -3.5
+Viewer.ViewpointF: 500.0
