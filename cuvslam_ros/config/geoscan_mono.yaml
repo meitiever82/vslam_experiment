@@ -1,0 +1,28 @@
+# GeoScan 单目模式配置 (只用左目, 绕开双目时差问题)
+# 标定来源: Kalibr (pinhole-equi)
+
+cuvslam_ros:
+  ros__parameters:
+    left_image_topic: "/left_camera/image"
+    right_image_topic: ""
+    imu_topic: ""                  # Mono 模式 cuVSLAM 不支持 IMU
+    camera_info_topic: ""
+
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+    camera_frame_id: "camera_link"
+
+    # Left camera (cam0) intrinsics
+    image_width: 1280
+    image_height: 1024
+    fx: 465.30269231092973
+    fy: 464.44407907099975
+    cx: 646.2240734070592
+    cy: 486.9358630691829
+    distortion_model: "fisheye"
+    distortion_coeffs: [-0.0313464513145838, 0.03307070111936863, -0.03358616295118505, 0.010940367109062672]
+
+    odometry_mode: "mono"          # 单目 VO (scale-ambiguous)
+    enable_slam: true
+    enable_landmarks: true
+    verbosity: 1

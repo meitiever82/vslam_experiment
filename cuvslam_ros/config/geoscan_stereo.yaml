@@ -1,0 +1,67 @@
+# GeoScan B1 双目鱼眼相机配置
+# 标定来源: Kalibr (pinhole-equi 模型)
+
+cuvslam_ros:
+  ros__parameters:
+    # Topics (B1 bag)
+    left_image_topic: "/left_camera/image"
+    right_image_topic: "/right_camera/image"
+    imu_topic: "/handsfree/imu"                  # 留空 = 纯双目 VO；填 IMU 话题并把 odometry_mode 改为 inertial 即启用 VIO
+    camera_info_topic: ""
+
+    # Frame IDs
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+    camera_frame_id: "camera_link"
+
+    # ---- Left camera (cam0) intrinsics ----
+    image_width: 1280
+    image_height: 1024
+    fx: 465.30269231092973
+    fy: 464.44407907099975
+    cx: 646.2240734070592
+    cy: 486.9358630691829
+    distortion_model: "fisheye"
+    distortion_coeffs: [-0.0313464513145838, 0.03307070111936863, -0.03358616295118505, 0.010940367109062672]
+
+    # ---- Right camera (cam1) intrinsics ----
+    right_fx: 462.6532257342507
+    right_fy: 461.95322655028104
+    right_cx: 622.1567016653636
+    right_cy: 541.5480235419994
+    right_distortion_coeffs: [0.017052626877708536, -0.08393575674877075, 0.07290533443221045, -0.02151514779076789]
+
+    # ---- Stereo extrinsics: rig_from_cam1 = inv(T_cn_cnm1) ----
+    # T_cn_cnm1 from kalibr = T_cam1_cam0
+    # inv: R^T, -R^T * t
+    # Rotation is near-identity, quaternion ≈ (0, 0, 0, 1)
+    rig_from_cam1_qx: 0.000353
+    rig_from_cam1_qy: -0.000443
+    rig_from_cam1_qz: 0.000349
+    rig_from_cam1_qw: 0.999999
+    rig_from_cam1_tx: 0.09738513291064156
+    rig_from_cam1_ty: -0.00000849
+    rig_from_cam1_tz: 0.00087507
+
+    # ---- IMU extrinsics: rig_from_imu = T_cam0_imu (from geoscan_camchain-imucam.yaml) ----
+    # Rotation matrix → quaternion (90° axis swap between FB100 IMU and OpenCV camera frame)
+    rig_from_imu_qx:  0.4956238075160589
+    rig_from_imu_qy: -0.5025380296879657
+    rig_from_imu_qz:  0.5070427100395011
+    rig_from_imu_qw:  0.4946920761550378
+    rig_from_imu_tx:  0.049964968131415
+    rig_from_imu_ty:  0.014075898634306
+    rig_from_imu_tz: -0.053596837940903
+
+    # ---- IMU noise (默认值是一般 MEMS 量级, 以实际 IMU datasheet / kalibr 结果为准) ----
+    gyroscope_noise_density: 1.6968e-4
+    gyroscope_random_walk: 1.9393e-5
+    accelerometer_noise_density: 2.0e-3
+    accelerometer_random_walk: 3.0e-3
+    imu_frequency: 780.0    # 实测 ~780Hz (ros2 topic hz /handsfree/imu)
+
+    # Tracker
+    odometry_mode: "inertial"        # "stereo" = 纯 VO; "inertial" = 双目 VIO (需同时设置 imu_topic)
+    enable_slam: true
+    enable_landmarks: true
+    verbosity: 1

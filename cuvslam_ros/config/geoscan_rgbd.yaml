@@ -1,0 +1,35 @@
+# GeoScan outdoor RGB-D 配置 (Intel D435i)
+# 标定来源: D435i 出厂标定 + BA 优化 (geoscan_camchain-all.yaml cam2)
+
+cuvslam_ros:
+  ros__parameters:
+    # Topics (outdoor bag)
+    left_image_topic: "/camera/color/image_raw"
+    depth_image_topic: "/camera/aligned_depth_to_color/image_raw"
+    right_image_topic: ""
+    imu_topic: ""
+    camera_info_topic: ""
+
+    # Frame IDs
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+    camera_frame_id: "camera_link"
+
+    # D435i RGB camera intrinsics (BA optimized)
+    image_width: 640
+    image_height: 480
+    fx: 607.58
+    fy: 603.56
+    cx: 335.82
+    cy: 239.95
+    distortion_model: "pinhole"
+    # distortion_coeffs omitted = no distortion (pinhole)
+
+    # Depth settings
+    depth_scale_factor: 1000.0   # 16UC1 mm -> meters
+
+    # Tracker
+    odometry_mode: "rgbd"
+    enable_slam: false
+    enable_landmarks: false
+    verbosity: 1
