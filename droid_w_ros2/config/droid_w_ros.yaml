@@ -1,0 +1,42 @@
+droid_w_node:
+  ros__parameters:
+    # Absolute path to the DROID-W repo (so the node can `import src.slam`).
+    droid_root: /home/steve/Documents/GitHub/slam/DROID-W
+
+    # Absolute path to a DROID-W YAML config. Pick or write one whose `cam:`
+    # block matches your camera intrinsics. The node forces dataset='ros' at
+    # runtime so the BufferedRGB adapter is used.
+    droid_config: /home/steve/Documents/GitHub/slam/DROID-W/configs/Dynamic/Bonn/bonn_dynamic.yaml
+
+    # ROS image input
+    image_topic: /camera/color/image_raw
+    compressed: false
+
+    # Take every Nth incoming frame (set >1 if the camera publishes faster
+    # than DROID-W can comfortably keep up).
+    frame_skip: 1
+
+    # Cap the in-memory buffer; 0 = unbounded. Each frame is HxWx3 uint8 BGR,
+    # so for a 640x480 stream this is ~0.9 MB/frame.
+    max_frames: 1500
+
+    # If >0, automatically launch SLAM as soon as this many frames have been
+    # collected. 0 means SLAM is only triggered by `ros2 service call
+    # /droid_w_node/start std_srvs/srv/Trigger`.
+    auto_start_after_n: 0
+
+    # Frames for the published TF / poses.
+    world_frame_id: droid_world
+    camera_frame_id: droid_camera
+
+    publish_rate_hz: 10.0
+
+    # Override SLAM output dir and scene name. The DROID-W YAML usually has a
+    # relative `data.output` (e.g. ./Outputs/Bonn) which would land under the
+    # cwd of `ros2 launch`. Set this to an absolute path.
+    output_dir: /home/steve/vslam_ws/Outputs/droid_w_ros
+    scene: ros_session
+
+    # If non-empty, on shutdown the node writes the latest published
+    # trajectory as a TUM-format file (timestamp tx ty tz qx qy qz qw).
+    output_traj_path: /home/steve/vslam_ws/Outputs/droid_w_ros/kf_traj_tum.txt
