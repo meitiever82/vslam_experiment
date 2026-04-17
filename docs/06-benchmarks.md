@@ -24,10 +24,11 @@
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
 | droid_w_ros2 / DROID-W | ⬜ (批处理) | — | ⬜ | ⬜ |
 | cuvslam_ros | ⬜ | ⬜ | ⬜ | ⬜ |
-| DPVO | ⬜ (COLCON_IGNORE) | — | ⬜ | — |
+| DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | ⬜ | — |
 | rgbdslam_v2 | — | — | — | ⬜ |
 | rtabmap | 在 `~/rtabmap_ws/`，独立记录 | — | — | — |
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
+| slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
 
 > 单元格内容示例：`🟢 ATE 0.28m / CPU 42%` 或 `🔴 IMU init 失败，见 §2.3`
 
@@ -190,6 +191,124 @@ ros2 bag play ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 --clock
 - 对比 obj：`outputs/limap_geoscan_finder/`（纯 VIO，20 条）、`outputs/limap_geoscan_colmap_only/`（纯 SfM，117 条）
 - 新脚本：`scripts/geoscan_colmap_full_sfm.py`（纯 COLMAP 对照组）
 
+### 2026-04-17 — DPVO mono on GeoScan B1 🟢
+
+**目标**：跑通 DPVO（学习型纯视觉里程计），与 finder VIO 轨迹对比。
+
+**系统**：DPVO（princeton-vl/DPVO, commit 89f8b27 DBoW2）。纯单目，无 IMU，无回环。
+
+**环境**：独立 venv `src/DPVO/.venv`（uv, Python 3.10, torch 2.3.1+cu121），不走 colcon。CUDA extensions（cuda_corr, cuda_ba, lietorch_backends）需 `pip install --no-build-isolation -e .` 编译，依赖 `thirdparty/eigen-3.4.0`（手动下载，非 submodule）。
+
+**数据**：bag `/left_camera/image`（10 fps, 4183 帧）。ROS2 wrapper `dpvo_ros_node.py` 订阅图像，内部 `cv2.fisheye.initUndistortRectifyMap` 去畸变（Kalibr equidistant → pinhole），直接喂 DPVO。
+
+**启动命令**：
+```bash
+# term A: DPVO node
+cd ~/vslam_ws/src/DPVO
+source /opt/ros/humble/setup.bash
+.venv/bin/python dpvo_ros_node.py \
+  --network dpvo.pth --config config/default.yaml \
+  --save_trajectory results/dpvo_ros_geoscan_traj.txt
+
+# term B: bag play
+ros2 bag play ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 --topics /left_camera/image
+```
+
+**结果**（前 1000 帧，~101 秒）：
+- 匹配 971 poses（vs finder_localization.txt，`evo_ape --t_max_diff 0.1`）
+- **APE RMSE = 0.60m**，median = 0.24m，max = 3.60m（起始段初始化不稳）
+- Scale correction: 18.5×（纯单目无绝对尺度，正常）
+- 轨迹形状与 finder 高度一致（见 `results/dpvo_vs_finder_1000f_map.png`）
+- 中后段（初始化稳定后）误差很小，起始段红区 max 3.6m
+
+**对比参考**：
+| 参考轨迹 | 匹配 poses | APE RMSE | APE median | scale |
+|---|---|---|---|---|
+| finder_localization.txt | 971 | 0.60m | 0.24m | 18.5× |
+
+**踩坑**：
+- limap 预处理的 523 帧（~1.3fps）跑出退化轨迹——帧率太低光流失效。必须用 bag 原始 10fps
+- 全量 4183 帧超过 `BUFFER_SIZE=4096`，8GB 显存 OOM（在 ~4100 帧崩）。解决方案：用前 1000 帧或 stride 2（~2090 帧）
+- ROS2 订阅队列要开大（5000），否则 bag 全速播 DPVO 处理不过来丢帧
+- `pip install -e .` 需 `--no-build-isolation`（隔离环境找不到 torch）
+- 依赖零散没有 requirements.txt：需 torch, torchvision, torch-scatter, einops, numba, pypose, opencv-python, matplotlib, scipy, evo, yacs, tqdm, gdown
+
+**产物**：
+- ROS2 wrapper：`src/DPVO/dpvo_ros_node.py`
+- 轨迹：`src/DPVO/results/dpvo_ros_geoscan_traj.txt`（TUM 格式，1000 poses）
+- 对比图：`src/DPVO/results/dpvo_vs_finder_1000f_map.png`
+- calib：`src/DPVO/calib/geoscan.txt`（pinhole intrinsics）
+
+### 2026-04-18 — slim-vdb LiDAR+Camera 语义体素地图 on GeoScan B1 🟢
+
+**目标**：跑 slim-vdb（OpenVDB 概率语义体素融合框架），用 livox LiDAR 出几何、右目鱼眼 + SegFormer 出语义、finder VIO 出位姿，生成停车场的稠密语义 3D 地图。
+
+**系统**：slim-vdb（umfieldrobotics/slim-vdb）+ openvdb slim-vdb 分支。全部在 `slimvdb_dev` docker 容器里编译运行（CUDA 12.1 + OpenCV 4.6 + Open3D 0.18，宿主 uid 1000 直通）。
+
+**数据流**：
+| 源 | 产物 |
+|---|---|
+| `/livox/lidar`（4183 帧，20064 点/帧）| `sequences/00/velodyne/*.bin` (float32 xyz+intensity, 1.3GB) |
+| `/right_camera/image` + SegFormer-B0 Cityscapes | `sequences/00/velodyne_predictions_txt/*.txt` (每点 "inst sem") |
+| `finder_localization.txt`（2615 TUM 位姿）| `poses.txt` (`T_world_velo = T_world_imu * T_imu_velo`) |
+
+**关键外参**（GeoScan 标定文件）：
+- Livox → 右目 (cam1)：`Rcl`/`Pcl`，~26° pitch（非重复扫描 Mid-360 的物理安装倾角）
+- cam1 ↔ IMU：Kalibr `T_cam1_imu`（equi, 0.13px）
+
+**启动命令**：
+```bash
+# 1. 抽取 LiDAR + poses
+python3 src/slim-vdb/scripts_geoscan/extract_geoscan.py \
+    --bag ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 \
+    --poses ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/finder_localization.txt \
+    --out_dir outputs/slimvdb_geoscan --sequence 00 --max_frames -1
+
+# 2. 生成语义 labels（流式读 bag，避免 OOM）
+src/DPVO/.venv/bin/python src/slim-vdb/scripts_geoscan/generate_labels.py \
+    --seq_dir outputs/slimvdb_geoscan/sequences/00 \
+    --bag ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48
+
+# 3. 跑 pipeline（容器内）
+docker exec slimvdb_dev ./kitti_pipeline \
+    --config config/kitti_geoscan.yaml --sequence 01 \
+    outputs/slimvdb_geoscan outputs/slimvdb_mesh
+```
+
+**结果**（sequence 01 = stride-3，1381/4143 帧；voxel_size=0.15m，prune_interval=10）：
+- TSDF 几何范围：**82×75×16m**（停车场一层走廊 + 上下层坡道）
+- 2.96M 活跃体素，OpenVDB 稀疏存储只 **9MB in-core**
+- **296 万**彩色点云（`_pointcloud.ply`，86MB）
+- 19 个 per-class triangle mesh（class 0=road, 2=building, 等），共 ~720MB
+- 集成吞吐：起手 17 FPS → 地图长大后 0.86 FPS，Render time 是瓶颈（随体素数线性增长，0.05s → 1.15s/帧）
+
+**踩坑 / 修复**：
+1. **openvdb slim-vdb fork 缺 `VecXFGrid` / `VecXf`**：只有 `VecXIGrid` / `VecXi`（int 版），slim-vdb 的 `std::conditional_t<CLOSED, VecXIGrid, VecXFGrid>` 类型查找失败。手动在 4 个 header 补 float 变体定义，覆盖装回 `/usr/local/include/`（避免 touch 源头触发全量重编）。
+2. **Docker build Open3D 0.18 依赖 gitlab.com eigen archive 403 GFW 打断**：从 GitHub eigen-mirror 下对应 commit tarball（2.7MB），Dockerfile 里 `COPY` 进 `/opt/deps/`，`sed` 改 `3rdparty/eigen/eigen.cmake` 的 URL 到 `file://`、删 `URL_HASH`（我们的 tarball SHA 跟 gitlab 版对不上）。
+3. **容器里 `/home/steve` 是 root:root 755**（只 bind-mount 了 workspace，不是整个 home），ccache 写 `~/.ccache` 权限被拒。`export CCACHE_DIR=${WS}/.ccache` 搞定。
+4. **libtorch 硬编码 hint 路径**（`/home/anjashep-frog-lab/libtorch`）；KITTI pipeline 其实不用 torch（只 scenenet/realworld 的实时分割用）。注释掉 `find_dependencies.cmake` 里的 libtorch include + 让 `datasets` CMake 只编 `KITTIOdometry.cpp`。
+5. **OpenCV `cv::imshow` 在 `nanovdb.cuh:244,273,312`** 导致 headless 运行 GTK init 失败。sed 全注释，重编 slim-vdb core。
+6. **KITTI pipeline 期望目录名 `velodyne_predictions_txt/`**（不是 `labels/`），还要 `intrinsics.txt`（`fx: / fy: / cx: / cy:` 格式）。
+7. **`poses.txt` 的坐标系**：pipeline 应用 `final = T_velo_cam * poses[i] * T_cam_velo` 共轭变换，对非恒等 `Tr`（~26° 旋转）会把 pose 扭曲 —— 最早 Z 方向漂 17m。修：**`calib.txt` 的 `Tr` 写成 identity**，`poses.txt` 直接写 `T_world_velo = T_world_imu * T_imu_velo`（预先把 body→velo 的静态变换吃掉）。修后 Z 跨度降到 5m（水平地面 slab 清晰）。
+8. **generate_labels.py 把 4183 帧图像全缓存内存**（16GB）OOM。改成流式：按时间戳顺序推进 LiDAR 和 camera 迭代器，同步配对。内存降到 <1GB，吞吐 22 FPS。
+9. **`prune_interval: -1`（默认）+ voxel_size 0.1m 全量跑 4143 帧卡 1.5h 无产出**：Render per-frame 随 map 体积线性增长，无修剪就失控。改 `voxel_size 0.15` + `prune_interval 10` + stride 3 后 25 min 跑完 1381 帧。
+10. **Cityscapes 19 类对地下停车场不对口**：道路/建筑/交通牌类主导（class 0/2/7），没有"柱子/停车线/天花板"语义。几何正确，语义"噪声性"正确。要解决需换 ADE20K 150 类室内模型或上 open-set CLIP。
+
+**产物**：
+- `outputs/slimvdb_mesh/kitti_01_-1_scans.vdb`（17MB, TSDF）
+- `outputs/slimvdb_mesh/kitti_01_-1_semantics.vdb`（723MB, 逐体素 19 类概率）
+- `outputs/slimvdb_mesh/kitti_01_-1_scans_pointcloud.ply`（86MB, 296 万带色点）
+- `outputs/slimvdb_mesh/kitti_01_-1_scans_{0..18}.ply`（per-class mesh，720MB 合计）
+- `outputs/slimvdb_mesh/preview_full.png`（三视图预览）
+- 数据 pipeline：`src/slim-vdb/scripts_geoscan/{extract_geoscan.py,generate_labels.py,build_in_container.sh}`
+- 调参 config：`src/slim-vdb/examples/cpp/config/kitti_geoscan.yaml`
+- Dockerfile patch：`src/slim-vdb/docker/builder/{Dockerfile,deps/eigen-*.tar.gz}`
+
+**下一步**：
+- 换 ADE20K / open-set CLIP 跑室内合适的语义
+- 把 Render step 从主循环解耦（只在 terminate 调一次），恢复 13+ FPS
+- 跟 AirSLAM stereo mesh / limap 线地图横向比
+
 ### （模板：每次运行填一条）
 **日期**：YYYY-MM-DD
 **系统**：`<repo_name>`（版本 / commit）
@@ -257,5 +376,7 @@ ps -p $(pgrep -f vins_node) -o %cpu,%mem --no-headers
 - [ ] 跑 `VINS-Fusion-ROS2` 的 GeoScan mono（单目，光流前端）
 - [ ] 跑 `cuvslam_ros` 的 GeoScan stereo-inertial
 - [x] 跑 `AirSLAM` 的 GeoScan stereo-inertial（2026-04-16 完成，见上）
+- [x] 跑 `DPVO` 的 GeoScan B1 mono（2026-04-17 完成，APE 0.60m/1000f，纯单目无尺度）
+- [x] 跑 `slim-vdb` 的 GeoScan B1（2026-04-18 完成，LiDAR+cam+VIO 融合，82×75×16m 稠密语义体素地图）
 - [ ] 跑 `ORB_SLAM3` 的 EuRoC V101 做横向参照（有真实 GT）
 - [ ] 写一个 `scripts/` 下的 `run_benchmark.sh` 批量脚本（待几个系统都跑通后再做）
