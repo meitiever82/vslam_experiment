@@ -18,7 +18,7 @@
 
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
-| open_vins | ⬜ | ⬜ | ⬜ | — |
+| open_vins | 🟢 2026-04-16 APE 0.76m vs finder (SE3) | ⬜ | ⬜ | — |
 | sqrtVINS | ⬜ | ⬜ | ⬜ | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
@@ -28,7 +28,7 @@
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
 | droid_w_ros2 / DROID-W(VO only, mapper off) | ⬜ 本机可试(~6-8GB, Metric3D+DINOv2+Dense BA, metric-scale 直接可用) | — | ⬜ | ⬜ |
 | droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | ⬜ 🟦(加 mapper 后 16-24GB, Spark 跑) | — | ⬜ 🟦 | ⬜ 🟦 |
-| cuvslam_ros | ⬜ | ⬜ | ⬜ | ⬜ |
+| cuvslam_ros | ⬜ | 🟢 2026-04-16 stereo VO, rectify_fisheye, APE 0.56m(122s段) | ⬜ | ⬜ |
 | DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | 🟢 2026-04-20 V1_01 APE 0.046m (1435 pairs, stride=2) | — |
 | MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |
 | VGGT-SLAM 🟦 | ⬜ 🟦 | — | ⬜ 🟦 | — |
@@ -91,6 +91,58 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-16 — cuvslam_ros stereo VO on GeoScan B1 🟢
+
+**目标**：调通 NVIDIA cuVSLAM 15.0 双目模式在 GeoScan B1 鱼眼数据集上的轨迹输出。
+
+**系统**：cuvslam_ros（自研 ROS2 wrapper for cuVSLAM 15.0.0），stereo VO 模式（无 IMU）。
+
+**数据**：`2026-02-12-16-47-48`（418s，10fps 双目鱼眼 1280×1024）。
+
+**发现的两个 bug + 修复**：
+
+1. **stereo extrinsic quaternion 错误**：手写 `rig_from_cam1_qx/qy/qz/qw` 漏掉 cam0→cam1 的 ~0.73° X 轴旋转（qx 差 18×，符号也反了）。ORB_SLAM3 直接吃 rotation matrix 不受影响。**修**：从 ORB_SLAM3 的 `Stereo.T_c1_c2` 矩阵用 Shepperd 公式算出 `(-0.006382, 0.000441, -0.000351, 0.999979)`。
+2. **cuVSLAM 内部 fisheye 处理在 ~108° HFOV 退化**：修完四元数后 tracking 不丢了，但轨迹完全跑飞（RMSE 21.7m，zigzag 集中在小区域）。cuVSLAM 文档说 fisheye 模式是 "pinhole + undistort"，对宽视角鱼眼 stereo matching 在边缘误差大。**修**：在 `stereo_callback` 里用 `cv::fisheye::initUndistortRectifyMap(K, D, R=I, P=K)` 预先把左右鱼眼去畸变为 pinhole，cuvslam Rig 改成 `Pinhole` 无畸变参数、保留原始 stereo extrinsics。
+
+**注**：`cv::fisheye::stereoRectify` 在 OpenCV 4.6 上返回退化 P 矩阵（fx≈0.00128），无法使用。改用 per-camera undistort 不做 stereo rectification，cuvslam 自己处理小的 inter-camera 旋转。
+
+**结果**（前 122s 段，1214 poses，Sim3 对齐 vs `finder_localization.txt`）：
+
+| 配置 | APE RMSE | APE max | path length |
+|---|---|---|---|
+| 原始 fisheye 直喂（quaternion 修完）| 21.7 m | 36.5 m | 839.9 m（GT 386.6m）|
+| **+ rectify_fisheye 预 undistort** | **0.56 m** | **1.19 m** | 90.3 m（122s 段）|
+
+**横向对比（同一 bag，全段 finder GT）**：
+| 系统 | APE RMSE vs finder | 备注 |
+|---|---|---|
+| open_vins mono-inertial | 0.76 m | 全段 414s |
+| **cuvslam stereo VO (rectify)** | **0.56 m** | 前 122s 段 |
+| ORB_SLAM3 stereo-inertial | （参考基线）| — |
+
+**启动命令**：
+```bash
+ros2 launch cuvslam_ros geoscan_stereo.launch.py \
+    rviz:=false trajectory_output_path:=results/cuvslam_rect_geoscan.tum
+# 另一终端:
+ros2 bag play ~/Documents/Datasets/GeoScan/B1/2026-02-12-16-47-48 --rate 1.0
+```
+
+**配置**：`src/cuvslam_ros/config/geoscan_stereo.yaml`（`rectify_fisheye: true`）。
+
+**产物**：
+- 轨迹：`results/cuvslam_geoscan.tum`（无 rectify，4130 poses，完整 418s）
+- 轨迹：`results/cuvslam_rect_geoscan.tum`（rectify，1214 poses，前 122s）
+- 对比图：`results/cuvslam_vs_openvins_xy_trajectories.png`（无 rectify vs GT vs openvins）
+- 对比图：`results/cuvslam_rect_xy_trajectories.png`（rectify vs GT）
+
+**下一步**：
+- [ ] 跑完整 418s rectify 拿全段 ATE
+- [ ] 试 inertial 模式（IMU 之前 "暂时不可用"，现在 stereo 稳了可以重新尝试）
+- [ ] 调 SLAM loop closure（全程 `lc_events=0`，没触发过回环）
+
+---
 
 ### 2026-04-20 — MapAnything feedforward mono on GeoScan B1 cam0 🔴
 
