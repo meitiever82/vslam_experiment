@@ -28,7 +28,7 @@
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
 | droid_w_ros2 / DROID-W 🟦 | ⬜ 🟦 (批处理) | — | ⬜ 🟦 | ⬜ 🟦 |
 | cuvslam_ros | ⬜ | ⬜ | ⬜ | ⬜ |
-| DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | ⬜ | — |
+| DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | 🟢 2026-04-20 V1_01 APE 0.046m (1435 pairs, stride=2) | — |
 | MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |
 | VGGT-SLAM 🟦 | ⬜ 🟦 | — | ⬜ 🟦 | — |
 | Gaussian-LIC 🟦 | — | ⬜ 🟦 即使 Spark 也要先 fork 适配 CUDA 13 / TensorRT 10 / ROS1→2 port,见 `memory/project_gaussian_lic_blockers.md` | — | — |
@@ -265,6 +265,43 @@ ros2 bag play ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 --clock
 - 最佳 obj：`~/vslam_ws/outputs/limap_geoscan_finder_ba/limap_out/triangulated_lines_nv4.obj`（36 KB，280 条 nv≥4）
 - 对比 obj：`outputs/limap_geoscan_finder/`（纯 VIO，20 条）、`outputs/limap_geoscan_colmap_only/`（纯 SfM，117 条）
 - 新脚本：`scripts/geoscan_colmap_full_sfm.py`（纯 COLMAP 对照组）
+
+### 2026-04-20 — DPVO mono on EuRoC V1_01_easy 🟢
+
+**目标**:DPVO 在硬核 benchmark(EuRoC Vicon GT)上拿数,跟 GeoScan 的 0.60m 做对照。
+
+**环境**:DPVO venv 补装 `plyfile`(1 行),其他不动。
+
+**数据**:`GlowBond/EuRoC_MAV_Dataset` (HuggingFace, 6GB 一个 zip 含 V1 三段)通过 `HF_ENDPOINT=hf-mirror.com hf download` 抓下来(ETH 原站国内基本不通,卡 20 分钟都不下)。`vicon_room1.zip` 解出 `V1_01_easy.zip` 再解出 `mav0/cam0/data/*.png`(2912 帧)。GT 已随 DPVO 仓库提供(`datasets/euroc_groundtruth/V1_01_easy.txt`),calib 也现成(`calib/euroc.txt`)。
+
+**跑法**:一次性脚本 `src/DPVO/run_v1_01.py`(改编自 `evaluate_euroc.py`,跳过 11 个场景循环,只跑 V1_01)。
+
+```bash
+cd ~/vslam_ws/src/DPVO
+.venv/bin/python run_v1_01.py    # stride=2, default config
+```
+
+**结果**:
+| 指标 | 值 |
+|---|---|
+| APE RMSE | **0.046 m** |
+| APE mean / median / max | 0.043 / 0.041 / 0.087 m |
+| 匹配 pose pairs | 1435 / 1456 est / 2871 ref |
+| Sim3 scale 对齐 | 是 |
+| 显存峰值 | ~6.6 GB |
+| 推理耗时 | ~3 min(stride=2, 1456 frames) |
+
+跟 DPVO paper 的 V1_01 ~0.04m 对得上,**这是目前工作区 ATE 最好的数字**。和 GeoScan 的 0.60m 一对比,就看出:**数据集质量压倒一切** — GeoScan 10fps + 鱼眼 + 室内大视差的场景,学习型纯单目里程计受限,EuRoC 20Hz + 小畸变 + 室内有纹理的场景就能干到 paper 水平。
+
+**踩坑**(给将来 DPVO 跨数据集用):
+1. `evaluate_euroc.py::run` 开子进程,外层 caller **必须**放 `if __name__ == "__main__"`,否则 multiprocessing spawn 炸。
+2. DPVO 约定 EuRoC 时间戳是 **ns-as-float**(直接拿文件名当 float 用,不除 1e9),跟 finder/TUM 秒制不同。GT 文件 `datasets/euroc_groundtruth/V1_01_easy.txt` 也是 ns 制。写新 eval 脚本时别下意识除 1e9。
+3. ETH 官方下载站 `robotics.ethz.ch/~asl-datasets/` 国内基本卡死,**HF mirror `hf-mirror.com` + GlowBond 的镜像** 是目前最靠谱路径。
+
+**产物**:
+- 轨迹:`src/DPVO/results/dpvo_euroc_v1_01.tum`(1456 poses,ns-as-float 时间戳)
+- eval 脚本:`src/DPVO/run_v1_01.py`
+- 原始数据:`src/DPVO/datasets/EUROC/V1_01_easy/`(~800MB);`vicon_room1.zip`(5.6GB,保留方便以后跑 V1_02/V1_03)
 
 ### 2026-04-17 — DPVO mono on GeoScan B1 🟢
 
