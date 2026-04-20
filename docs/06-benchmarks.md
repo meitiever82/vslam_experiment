@@ -26,7 +26,8 @@
 | ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | ⬜ | ⬜ |
 | VINS-Fusion-ROS2 | ⬜ | ⬜ | ⬜ | — |
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
-| droid_w_ros2 / DROID-W 🟦 | ⬜ 🟦 (批处理) | — | ⬜ 🟦 | ⬜ 🟦 |
+| droid_w_ros2 / DROID-W(VO only, mapper off) | ⬜ 本机可试(~6-8GB, Metric3D+DINOv2+Dense BA, metric-scale 直接可用) | — | ⬜ | ⬜ |
+| droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | ⬜ 🟦(加 mapper 后 16-24GB, Spark 跑) | — | ⬜ 🟦 | ⬜ 🟦 |
 | cuvslam_ros | ⬜ | ⬜ | ⬜ | ⬜ |
 | DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | 🟢 2026-04-20 V1_01 APE 0.046m (1435 pairs, stride=2) | — |
 | MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |
