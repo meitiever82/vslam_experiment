@@ -12,25 +12,37 @@
 
 ## 矩阵总览
 
+**机器标注**(2026-04-20 加):
+- 🟦 = DGX Spark pending（128GB 统一显存机器,待迁移后跑）
+- 其他无标记条目 = 本机 4060 Laptop 8GB 能做,计划在本机完成
+
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
 | open_vins | ⬜ | ⬜ | ⬜ | — |
 | sqrtVINS | ⬜ | ⬜ | ⬜ | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
-| VINGS-Mono | — | — | ⬜ | — |
+| VINGS-Mono 🟦 | — | — | ⬜ 🟦 | — |
 | ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | ⬜ | ⬜ |
 | VINS-Fusion-ROS2 | ⬜ | ⬜ | ⬜ | — |
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
-| droid_w_ros2 / DROID-W | ⬜ (批处理) | — | ⬜ | ⬜ |
+| droid_w_ros2 / DROID-W 🟦 | ⬜ 🟦 (批处理) | — | ⬜ 🟦 | ⬜ 🟦 |
 | cuvslam_ros | ⬜ | ⬜ | ⬜ | ⬜ |
 | DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | ⬜ | — |
+| MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |
+| VGGT-SLAM 🟦 | ⬜ 🟦 | — | ⬜ 🟦 | — |
+| Gaussian-LIC 🟦 | — | ⬜ 🟦 即使 Spark 也要先 fork 适配 CUDA 13 / TensorRT 10 / ROS1→2 port,见 `memory/project_gaussian_lic_blockers.md` | — | — |
+| GS_ICP_SLAM 🟦 | — | — | — | ⬜ 🟦 |
+| SGS-SLAM 🟦 | — | — | — | ⬜ 🟦 |
+| Mobile-GS 🟦 | — | ⬜ 🟦 离线 3DGS,走 ORB_SLAM3/AirSLAM KFs 导 COLMAP | — | ⬜ 🟦 |
 | rgbdslam_v2 | — | — | — | ⬜ |
 | rtabmap | 在 `~/rtabmap_ws/`，独立记录 | — | — | — |
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
 
 > 单元格内容示例：`🟢 ATE 0.28m / CPU 42%` 或 `🔴 IMU init 失败，见 §2.3`
+
+**🟦 = 等 DGX Spark**:详见 `memory/project_big_vram_blocked.md`,这些仓库在 4060 8GB 跑不动或跑出来是退化结果,实际 benchmark 数据到 Spark 上补。Spark 适配检查项在 `memory/project_spark_adaptation.md`(待用户首次部署时回填)。
 
 ---
 
@@ -77,6 +89,69 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-20 — MapAnything feedforward mono on GeoScan B1 cam0 🔴
+
+**目标**：把 MapAnything(Meta, facebook/map-anything, ViT-g14 1B)当作"前馈 SfM"放到 GeoScan cam0 上,一次性回归稠密 pts3d + 相机位姿 + 度量尺度,和 finder / open-vins / ORB_SLAM3 轨迹做 ATE 对比。
+
+**Pipeline**(脚本在 `src/vslam_experiment/scripts/mapanything/`):
+1. `extract_cam0_undist.py`:bag(`/left_camera/image` 4183 帧, equidistant fisheye)→ `cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(balance=0)` + `remap` → 针孔 JPEG + ns 时间戳。
+2. `run_mapanything_geoscan.py`:`mapanything.utils.image.load_images(resolution_set=518)` → 模型 bf16 → `model.infer(memory_efficient_inference=True, minibatch_size=1, use_amp=False)` → TUM 轨迹 + `run_stats.json`。
+3. `evo_ape tum ref est -vas --t_max_diff 0.5`(Sim3 对齐,时间戳松 0.5s 因为我们抽帧的 10fps → 0.077fps / 0.3fps 跟 baseline 100Hz 不对齐)。
+
+**结果**(stride=130,33 views,覆盖 416s):
+| 参考 | ATE RMSE(m) | mean | median | max | Sim3 scale | 说明 |
+|---|---|---|---|---|---|---|
+| finder_localization | **24.61** | 22.61 | 22.37 | 41.74 | 0.964 | 32 pose pairs |
+| open-vins | **24.22** | 22.28 | 22.24 | 40.25 | 0.960 | 32 pose pairs |
+
+推理 13.6s / 33 views @ peak VRAM 4.27 GB,`metric_scaling_factor=9.94`(单场景常数)。
+
+**核心教训**(写进 memory): **ViT-g14 encoder 不分片,跟 view 数线性耗显存**。RTX 4060 8GB 实测上限:
+- 21 views → 3.55 GB OK
+- 53 views → 8 GB+ OOM
+- 105 views → OOM
+所以 4060 最多跑 ~30 views,stride=10(目标 418 views)完全不可行。`memory_efficient_inference=True` 只影响稠密 prediction head,不影响 encoder;`minibatch_size=1` 同理无效。
+
+**踩的坑**(顺时间):
+1. **HF 下载 GFW 卡住**:`huggingface.co` 在国内会停在某个 blob 上 20+ 分钟不动,用 `HF_ENDPOINT=https://hf-mirror.com` 一发入魂,2GB/5 分钟下完。权重 ~4.6GB(ViT-g14)。
+2. **ViT-g14 fp32 OOM**:`model = MapAnything.from_pretrained().to(cuda)` 直接吃 4.4 GB,加上 xorg 3 GB 在 8GB 上爆 。必须 `model.to(torch.bfloat16).to(cuda)`(在 CPU 上先 cast,再搬)。
+3. **bf16 dtype 瘟疫**(这是主要复杂性,连环补丁):
+   - 直接 bf16 模型 + fp32 输入:`patch_embed conv2d` 炸 `Input(float) vs bias(bfloat16)` → 手动 cast `view["img"].to(bf16)`。
+   - cam_trans_encoder 用内部 dummy fp32 pose tensor:Linear 炸 `mat1 Float mat2 BFloat16` → `torch.set_default_dtype(torch.bfloat16)` 让内部 `torch.zeros()` 默认 bf16。
+   - `recover_pinhole_intrinsics_from_ray_directions` 里 `torch.linalg.solve` 在 bf16 autocast 下 cusolver 没 bf16 LU → monkey-patch + `with autocast(enabled=False)` 强制 fp32 解 LU。
+   - postprocess `.cpu().numpy()` 在 bf16 上 `TypeError: Got unsupported ScalarType BFloat16` → 全局 monkey-patch `torch.Tensor.numpy` 先 `.float()`。
+4. **GLB / evo 的 scipy-numpy 2.x ABI 不兼容**:系统 scipy 1.8(apt)编译时绑的是 numpy 1.x,和 pip 装 mapanything 拉进来的 numpy 2.2.6 不合,`from scipy.spatial._ckdtree`崩 `dtype size changed`。`pip install --user 'scipy>=1.13'` 装 scipy 1.15.3 user-space 覆盖掉系统的即可。GLB 本次跳过(`--no_glb`)。
+
+**24m ATE 为什么这么烂**:MapAnything 训练任务是密集重叠的多视图 SfM/MVS,期望 view 之间有强共视。我们 stride=130 两帧间隔 13 秒 + 走廊大视差,超出它有效工作假设。文档 `docs/05-feedforward-recon.md §2` 本来就写了"适合离散多视图重建,不适合长轨迹 SLAM"——这次是 empirical 验证。轨迹 xyz 分布 `x∈[-1,11] y∈[-5,0] z∈[-1,40]` 几乎 98% 集中在 Z 轴(相机光轴),完全没展开 finder 里看到的 62×64 m 平面移动,印证前馈模型在稀疏长轨迹上会退化为"相机沿光轴前进"的 prior。
+
+**进一步测试:MVS 模式(喂外部位姿)**:怀疑轨迹错导致建图散,把 `finder_localization.txt` 当 camera_poses 输入(脚本加 `--pose_tum`),MapAnything 只负责稠密重建,不估 pose。得到 `full_s130_mvs_finder/scene.glb` 150 MB mesh(13.7s 推理, peak VRAM 4.30 GB, metric_scale=15.625)。**建图依然散乱** — 33 帧 @ stride=130 之间共视太少,MVS 也救不回来。**结论:feedforward 模型在这个稀疏采样下,pose 或 mesh 都不能用**。proper use case 要 stride=2~5(800-2000 views)+ A100 级显卡。
+
+**MVS 模式的额外 bf16 坑**(在 pose-only 模式之外新发现):
+- `camera_poses` 作为 (4,4) 矩阵传 → 模型内部 decomp 到 quat+trans 时 `einsum(R1_inv, trans1)` 混了 bf16/fp32 crash。改用 `(quat, trans)` tuple(bf16)形式直接传,绕开 decomp。
+- `intrinsics` (bf16) → 内部 `get_rays_in_camera_frame` 算出 `ray_directions` 是 fp32,喂到 `_encode_and_fuse_ray_dirs` 的 bf16 buffer 里 `Index put` crash。Monkey-patch `preprocess_input_views_for_inference`,在它返回后把 `ray_directions` / `ray_directions_cam` / `depth_along_ray` / `cam_quats` / `cam_trans` 统一 cast 到 `img.dtype`。
+- 还要注意 monkey-patch 必须打在 `mapanything.models.mapanything.model` 的模块命名空间里,因为它是 `from X import Y` 进来的 — 只 patch `mapanything.utils.inference.Y` 不生效。
+
+**结论和清退方向**:feedforward multi-view 在这个 bag 上既不能做 pose 估计也不能做稠密重建,primary use case(稀疏长走廊)不适配。**4060 8GB 上前馈路线整个清退**,全部转大显存机器继续(A100 40/80GB 或 H100,候选 views 数:A100-40GB ~500 / 80GB ~1000 / H100-80GB ~1200)。详见 `memory/project_feedforward_big_gpu_todo.md`。
+
+脚本已经备好(`src/vslam_experiment/scripts/mapanything/{extract_cam0_undist.py, run_mapanything_geoscan.py}`),到大显存机上要做的改造:
+- 去掉本机的 bf16 monkey-patch 链(fp32 直接跑就行,不缺显存)
+- 环境换 uv venv(快 + 不污染 pyenv-shim)
+- stride=2~5 出 800-2000 views 的 MVS
+- 走 `demo_colmap.py` 风格导出 COLMAP → gsplat 训 3DGS
+
+**短期(继续在 4060)**:走线/点 SLAM 路线(AirSLAM stereo-inertial / ORB_SLAM3 / DPVO)+ slim-vdb 体素化,已跑通,不再试前馈。
+
+**后续可尝试**:
+- 切滑窗(每 30 views 一段,段间做 ICP/Sim3 对齐),会降低每段 ATE 但得拼接。
+- 换 Apache 小模型`facebook/map-anything-apache`(同尺寸,同训练算力)不会省显存。
+- 用低分辨率(缩小 `resolution_set` → 384 或 256)或更小的 base-model(如 Pi3-X 用 ViT-L 代替 ViT-g),能容纳更多 views。
+- 真正想看"前馈 SfM"给 gsplat 的完整 pipeline,换到 A100 40GB 跑 full stride=10(419 views)再比。
+
+**产物**:`~/vslam_ws/runs/mapanything_geoscan/`:
+- `smoke_s200/` — 21 views 通路验证(pose-only)
+- `full_s130/` — 33 views pose-only:`trajectory_mapanything.tum`, `eval_vs_{finder,openvins}.zip`, `traj_plot.png`
+- `full_s130_mvs_finder/` — 33 views MVS:`scene.glb` 150 MB, `trajectory_mapanything.tum`(喂回的,不是估计的), `run_stats.json`
 
 ### 2026-04-15 — 文档初始化
 - 建 `docs/06-benchmarks.md`
@@ -305,9 +380,114 @@ docker exec slimvdb_dev ./kitti_pipeline \
 - Dockerfile patch：`src/slim-vdb/docker/builder/{Dockerfile,deps/eigen-*.tar.gz}`
 
 **下一步**：
-- 换 ADE20K / open-set CLIP 跑室内合适的语义
-- 把 Render step 从主循环解耦（只在 terminate 调一次），恢复 13+ FPS
-- 跟 AirSLAM stereo mesh / limap 线地图横向比
+- ~~换 ADE20K / open-set CLIP 跑室内合适的语义~~（2026-04-20 完成，见下）
+- ~~把 Render step 从主循环解耦（只在 terminate 调一次），恢复 13+ FPS~~（2026-04-20 完成，见下）
+- ~~跟 AirSLAM stereo mesh / limap 线地图横向比~~（2026-04-20 完成，见下）
+
+### 2026-04-20 — slim-vdb 收尾三件套 🟢
+
+#### (1) Render decouple（恢复 13+ FPS）
+
+**改动**：`examples/cpp/utils/Config.h` 加 `SLIMVDBConfig::render_every_frame_`（default **false**）；
+`examples/cpp/kitti_pipeline.cpp` 主循环里 gate 住 `tsdf_volume.Render(...)`，把 "最终一帧预览 render" 移到所有 VDB/mesh/pointcloud 磁盘写入**之后**，这样即使 render 崩溃也不会丢输出。`config/kitti_geoscan.yaml` 加 `render_every_frame: False`。
+
+**效果**：200 frames、NCLASSES=19 smoke test（`n_scans=200`）：
+- 之前（render 每帧）：17 FPS → 0.86 FPS（map 涨大后）
+- 现在（render 关掉）：**~150 FPS 稳定**（基本就是 Integrate 本身的时间），200 帧 6.3s 跑完
+- Render 列时间：4e-7 ~ 1e-6 s（分支被跳过的零开销）
+
+#### (2) ADE20K 150-class 语义
+
+**Python 侧（`scripts_geoscan/generate_labels.py`）**：加 `--label-space auto|cityscapes|ade20k` 和 `--max_frames N`。auto 按 `model` 名字嗅（含 "ade" 即 ade20k）。`ade20k_palette()` 里 seed=42 随机色板 + 几个 anchor（wall=0 floor=3 ceiling=5 pillar=42 light=83 pole=94）盯住可读性。
+
+**C++ 侧**：`SLIMVDB_NCLASSES` 从 19 → **150**，整库（cuda_lib + slimvdb + pybind）重编 + `cmake --install` 覆盖 `/usr/local/{include,lib}/`，再重编 `examples/cpp/kitti_pipeline`。`ccache` 缓存放 `${WS}/.ccache`，先 `chown -R 1000:1000` 避免 root-owned 旧 cache 阻塞。
+
+**CUDA 701 修复**：NCLASSES=150 + render block size 512 → kernel register budget 爆，launch 时 `cudaErrorLaunchOutOfResources`。`src/slimvdb/slimvdb/nanovdb_utils/common.h:79` 把 `computeForEach` block size 改成 **128**，rebuild cuda_lib + reinstall 即可。
+
+**ADE20K 200 帧 smoke test**：
+- 集成速率：**50 – 100 FPS**（NCLASSES 从 19 → 150 带来 3–5× 语义向量 IO，但仍远超原 0.86 FPS）
+- 类别分布符合预期：wall（class 0）4.2MB ply 最大，floor（3）2.7MB，ceiling（5）2.5MB，railing（38）也有出货
+- 总耗时 9.7s 含最终 render + 磁盘写
+
+**配置**：`examples/cpp/config/kitti_geoscan_ade20k.yaml`。跑法：
+```bash
+# 1. ADE20K labels（任意子集，--max_frames N）
+src/DPVO/.venv/bin/python src/slim-vdb/scripts_geoscan/generate_labels.py \
+    --seq_dir outputs/slimvdb_geoscan/sequences/00 \
+    --bag ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 \
+    --model nvidia/segformer-b0-finetuned-ade-512-512 \
+    --max_frames 200 --save_viz
+
+# 2. kitti_pipeline（NCLASSES=150 构建）
+docker exec slimvdb_dev bash -lc '
+  cd /home/steve/vslam_ws/src/slim-vdb/examples/cpp &&
+  ./kitti_pipeline --config config/kitti_geoscan_ade20k.yaml --sequence 01 \
+    --n_scans 200 /home/steve/vslam_ws/outputs/slimvdb_geoscan \
+    /home/steve/vslam_ws/outputs/slimvdb_mesh_ade20k'
+```
+
+#### (3) 横向比 slim-vdb / limap / AirSLAM
+
+**脚本**：`scripts_geoscan/compare_maps.py`。读 `.ply`（stream 子采 150k 点）+ `.obj`（limap 线段）+ 两条 TUM trajectory，对 AirSLAM 轨迹对 finder 做 Umeyama 配准后三联图输出到 `outputs/map_comparison.png`。
+
+**坐标系**：slim-vdb 和 limap 都用 finder_localization.txt 的 body-frame 姿态做三角化/体素融合，原生在 finder world frame。AirSLAM 自己初始化，需要 Umeyama 对齐。
+
+**注意**：AirSLAM trajectory 用 `src/AirSLAM/debug/zdrift_run3/trajectory_v0.txt`，top-level `debug/trajectory_v0.txt` 是 IMU g-unit 修复前的数据（Z 漂到 −492m，无法对齐）。
+
+**指标**（post-fix AirSLAM vs finder，342 对共同时间戳）：
+- Umeyama scale s=1.10（AirSLAM 轨迹长度相对 finder +10%）
+- APE: **rmse 2.12 m, max 4.36 m, mean 1.84 m**
+- bbox: slim-vdb 80×73×16m, limap 70×64×12m（limap 只覆盖 finder 走过的核心区）
+
+**跑法**：
+```bash
+src/DPVO/.venv/bin/python src/slim-vdb/scripts_geoscan/compare_maps.py
+# → outputs/map_comparison.png
+```
+
+#### (4) 延伸：全长 ADE20K + AirSLAM 稠密地图导出
+
+**全长 ADE20K rerun**：相同 stride=3 config，n_scans=-1，1381 frames。
+- 集成速率 **66 – 98 FPS**（render decouple 之后）
+- Integrate time 稳在 10–19 ms（prune_interval=10 控 map 体积）
+- 写磁盘：VDB 60ms、semantic VDB 3.4s（NCLASSES=150 下逐体素语义向量更厚）、mesh 38.5s、pointcloud 2.7s
+- 产物：`outputs/slimvdb_mesh_ade20k_full/kitti_01_-1_scans_pointcloud.ply`（ADE20K 语义着色稠密点云）
+- 跑中有一次 `CUDA error 2: out of memory` 但非致命，集成继续；最终 Render 先做磁盘写再调用，OOM 也不吃输出
+
+**AirSLAM 稀疏图导出**：新增 `src/AirSLAM/demo/map_to_ply.cpp`（link `${PROJECT_NAME}_lib` + rclcpp 但不 init），用 boost `binary_iarchive` 反序列化 `AirSLAM_mapv0.bin`，dump 出：
+- `<prefix>.ply`       — mappoints（valid，world-frame，白色）
+- `<prefix>_lines.obj` — maplines（EndpointsValid 的）
+- `<prefix>_kftraj.txt` — keyframe 轨迹 TUM 格式
+
+zdrift_run3 导出后：47581 valid points、610 valid lines、535 keyframes。文件大小 1.8MB。
+
+**跑法**（容器内，因为依赖 TensorRT）：
+```bash
+docker run --rm --gpus all --user "$(id -u):$(id -g)" -e USER=steve -e HOME=/tmp \
+  -v /home/steve/vslam_ws:/home/steve/vslam_ws -w /home/steve/vslam_ws \
+  airslam:latest bash -lc '
+    source /opt/ros/humble/setup.bash && source install/setup.bash
+    install/air_slam/lib/air_slam/map_to_ply \
+      src/AirSLAM/debug/zdrift_run3/AirSLAM_mapv0.bin \
+      outputs/airslam_exports/zdrift_run3'
+```
+
+**3-way 稠密比**（`compare_maps.py` 扩到 2×2 panel）：
+- slim-vdb 稠密点云（ADE20K 语义色）
+- limap 结构线
+- AirSLAM 稀疏三角化点（蓝）+ map lines（绿），经 Umeyama 对齐到 finder 后 **47279/47581 pts (99.4%) 落在 slim-vdb bbox 内**；610/610 segments 全落在 bbox 内
+- 三轨迹 overlay
+
+AirSLAM 有少量外点落在 slim-vdb bbox 外（远距离错误三角化）——画图时 clip 到 slim-vdb bbox ±5m。最终产物：`outputs/map_comparison_ade20k.png`。
+
+**跑法**：
+```bash
+src/DPVO/.venv/bin/python src/slim-vdb/scripts_geoscan/compare_maps.py \
+    --slimvdb outputs/slimvdb_mesh_ade20k_full/kitti_01_-1_scans_pointcloud.ply \
+    --out outputs/map_comparison_ade20k.png
+```
+
+---
 
 ### （模板：每次运行填一条）
 **日期**：YYYY-MM-DD
