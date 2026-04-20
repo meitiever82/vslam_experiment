@@ -39,6 +39,7 @@
 | rtabmap | 在 `~/rtabmap_ws/`，独立记录 | — | — | — |
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
+| gsplat offline 3DGS（cam0 + finder pose） | 🟡 2026-04-20 300 帧 / 115k 高斯 / 73s / peak VRAM 1.18GB / PSNR~33, 车库走廊可辨认但细节糊 — 待加 SSIM + 30k iter + SfM init | — | — | — |
 
 > 单元格内容示例：`🟢 ATE 0.28m / CPU 42%` 或 `🔴 IMU init 失败，见 §2.3`
 
@@ -265,6 +266,51 @@ ros2 bag play ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 --clock
 - 最佳 obj：`~/vslam_ws/outputs/limap_geoscan_finder_ba/limap_out/triangulated_lines_nv4.obj`（36 KB，280 条 nv≥4）
 - 对比 obj：`outputs/limap_geoscan_finder/`（纯 VIO，20 条）、`outputs/limap_geoscan_colmap_only/`（纯 SfM，117 条）
 - 新脚本：`scripts/geoscan_colmap_full_sfm.py`（纯 COLMAP 对照组）
+
+### 2026-04-20 — gsplat offline 3DGS on GeoScan B1 cam0(finder pose)🟡
+
+**目标**:用已知 pose(finder_localization.txt)+ cam0 图像做离线 3DGS,验证"传统 SLAM pose + 现代稠密重建"路线 — 替代 MapAnything 前馈 SfM 失败的那条线。
+
+**Pipeline**(脚本在 `src/vslam_experiment/scripts/gsplat/`):
+1. `prepare_3dgs_data.py`:从 finder(2615 poses)线性抽 300 帧 → 对每个 pose 时间戳找 bag 里最近的 cam0 图像 → fisheye(Kalibr equidistant)→ pinhole 去畸变 → 写 `images/NNNNNN.jpg` + `poses.json` + `intrinsics.json` + `scene_stats.json`。**关键点**:`finder_localization.txt` 是 **IMU(body)系位姿**,必须右乘 `T_imu_cam0 = inverse(T_cam_imu)`(从 Kalibr yaml 读)才是 cam0 的 cam2world。
+2. `train_3dgs_densify.py`:gsplat 1.5.3 `DefaultStrategy` 带动态 split/clone/prune,100k 初始高斯,15000 iter,L1 损失,rand 初始化(bbox = traj_bbox + pad_xy=8m + pad_z=6m,因为 finder 轨迹 Z 只有 0.4m 范围,必须给 ceiling/floor 大 padding)。
+3. 输出 `.ply`(3DGS 官方格式,SuperSplat / antimatter15 viewer 打得开)+ val 渲染。
+
+**结果**:
+| 指标 | 值 |
+|---|---|
+| 高斯数(init → final) | 100k → **115,974** |
+| 训练时间 | **73 s** |
+| 峰值显存 | **1.18 GB** |
+| PSNR(L1 近似) | ~33 dB |
+| 点云文件 | 19 MB `densify_output/point_cloud.ply` |
+
+定性:车库走廊结构可辨认(顶灯条 / 地面透视 / 两侧柱子 / 车辆轮廓),但细节糊 — 缺 SSIM 损失 + 迭代数偏少(paper 30k)+ 随机初始化(paper 从 SfM 点云)。
+
+**迭代过程**(三次,印证"小 bug 几个叠加搞得看起来模型不工作"):
+1. **v1** 50k 固定高斯 + 随机 bbox init(未做 IMU→cam 变换)+ 位姿系不对 → 渲染全黑,PSNR 20,用户"完全不对"。
+2. **v2** 加 `T_imu_cam0` 右乘 → 仍全黑,PSNR 20 — pose 虽然对了,但 `traj_bbox Z 范围只 0.4m`,50k 高斯全铺在地面薄层,天花板和墙没覆盖。
+3. **v3** pad_xy=8 / pad_z=6 + 200k 高斯 + 平均场景色初始化 → PSNR 26,渲染开始出形状。
+4. **v4(当前)**`DefaultStrategy` densify/prune + 15000 iter → PSNR ~33,车库可辨认。
+
+**gsplat 安装**:`pip install --user "gsplat>=1.3.0"`(实际装到 1.5.3),**只装库够用**,examples/requirements.txt 那一堆(pycolmap / viser / fused-ssim / tyro / numpy<2 / nerfview)不装也能训 — 自己写 trainer 用 `gsplat.rasterization` 和 `gsplat.strategy.DefaultStrategy` 即可。注意:
+- **从 `src/gsplat/` 下跑会 shadow import 崩**(仓库的 `gsplat/` 目录被当成包,找不到已安装的 CUDA 扩展)。在 `~/vslam_ws/` 或 `/tmp` 根下跑可以。
+- Blackwell/Ada 首次运行会 JIT 编译 CUDA kernel(~2 分钟),之后缓存。
+
+**产物**:`~/vslam_ws/runs/geoscan_3dgs/`:
+- `images/000000.jpg ~ 000299.jpg`(针孔去畸变 cam0 帧)
+- `poses.json` / `intrinsics.json` / `scene_stats.json`
+- `output/` — v3 基线训练(50k, 5000 iter, no densify)
+- `densify_output/point_cloud.ply`(v4,当前最好结果,19MB)
+
+**Viewer**:`.ply` 本地拖进 https://antimatter15.com/splat/ 或 SuperSplat / Spectacular.app 渲染。rerun 也支持但要 `rerun-sdk >= 0.24` 的 Gaussian viewer 插件。
+
+**待办**(下次继续):
+- 装 `fused-ssim`(有 arm/x86 wheel)加真 SSIM 损失
+- iters 拉到 30000(paper 默认)
+- 用 ORB_SLAM3 / AirSLAM 的 map points 做 SfM init 替换随机 bbox init
+- 换 AirSLAM stereo-inertial 的 535 KF pose(是不是比 finder 更利于收敛?)
+- 尝试加入 cam1 数据做双目 3DGS(gsplat 能吃任意数量 view)
 
 ### 2026-04-20 — DPVO mono on EuRoC V1_01_easy 🟢
 
