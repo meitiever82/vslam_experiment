@@ -31,7 +31,7 @@
 | cuvslam_ros | ⬜ | 🟢 2026-04-16 stereo VO, rectify_fisheye, APE 0.56m(122s段) | ⬜ | ⬜ |
 | DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | 🟢 2026-04-20 V1_01 APE 0.046m (1435 pairs, stride=2) | — |
 | MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |
-| VGGT-SLAM 🟦 | ⬜ 🟦 | — | ⬜ 🟦 | — |
+| VGGT-SLAM 🟦 | 🔴 2026-04-21 mono right-cam 392px submap=4: SL(4) 后端在 submap 36 奇异崩掉,前 35 子图 175 poses APE 16.0m / max 30.4m (Sim3). 再加 SL(4) 退化和 8GB VRAM 双重上限,**Spark 上重跑 518px + submap=16** 🟦 | — | ⬜ 🟦 | — |
 | Gaussian-LIC 🟦 | — | ⬜ 🟦 即使 Spark 也要先 fork 适配 CUDA 13 / TensorRT 10 / ROS1→2 port,见 `memory/project_gaussian_lic_blockers.md` | — | — |
 | GS_ICP_SLAM 🟦 | — | — | — | ⬜ 🟦 |
 | SGS-SLAM 🟦 | — | — | — | ⬜ 🟦 |
@@ -41,6 +41,7 @@
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
 | gsplat offline 3DGS（cam0 + finder pose） | 🟡 2026-04-20 300 帧 / 115k 高斯 / 73s / peak VRAM 1.18GB / PSNR~33, 车库走廊可辨认但细节糊 — 待加 SSIM + 30k iter + SfM init | — | — | — |
+| GLIM LIO + dpvo_frontend(Scheme C 紧耦合) | 🟢 2026-04-21 早:用 Python bag_replay_monotone.py 绕开 ros2 bag play 的时序 bug,**baseline 1.88m vs +DPVO 0.73m(SE3),RMSE 提升 2.6×**(不同段对照,但趋势明确) | — | — | — |
 
 > 单元格内容示例：`🟢 ATE 0.28m / CPU 42%` 或 `🔴 IMU init 失败，见 §2.3`
 
@@ -91,6 +92,68 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-21 — VGGT-SLAM feedforward mono on GeoScan B1 🔴
+
+**目标**:把 MIT-SPARK 的 **VGGT-SLAM v2**(`src/VGGT-SLAM/`, MapAnything 前馈 + SL(4) 因子图后端)放到 GeoScan B1 右目鱼眼上,看它能不能在 feedforward 失败之后把长轨迹 SLAM 救回来(跟 MapAnything 24m 那次的对照)。
+
+**Pipeline**:
+1. 抽图:`scripts_geoscan/extract_geoscan_images.py` 从 bag `/right_camera/image` 读 equidistant fisheye 4082 帧 → `cv2.fisheye.initUndistortRectifyMap` 手动构新 pinhole K(scale CAM1_K 而不是 `estimateNewCameraMatrixForUndistortRectify`——后者对近针孔 equi 返回 focal≈0 的退化 K,跟 AirSLAM `camera.cc` 修过的是同一个坑)→ 写 pinhole PNG + `timestamps.txt` + `pinhole_K.txt`。`--start_offset_s 10` 跳开头静止段。
+2. 跑 SLAM:docker `vggt-slam:latest`(Ubuntu 22.04 + CUDA 12.1 cudnn-devel + Py 3.11 venv + torch 2.3.1 + gtsam-develop + VGGT_SPARK)。
+3. 权重:先一股脑下齐,`torch.hub.load_state_dict_from_url` 不听 `HF_ENDPOINT`,用 `huggingface_hub.hf_hub_download()`(HF_ENDPOINT=hf-mirror)把 VGGT-1B `model.pt` 5.0GB 一次拉到 `~/.cache/torch/hub/checkpoints/model.pt`(HF Xet 分块 curl 跟不全,必须走 huggingface_hub)。`dinov2_vitb14_pretrain.pth` 和 `dino_salad.ckpt` 从 fbaipublicfiles / GitHub releases 另外 curl 到同一目录。
+4. Post-process:`postprocess_poses.py` 把 VGGT 的 `frame_id tx ty tz qx qy qz qw`(col 0 是图序号不是时间戳)替换成 timestamps.txt 里的真时间戳 → `poses_tum.txt`。
+5. Eval:`evo_ape tum -s -va --t_max_diff 0.5`(Sim3,mono 尺度不可观)。
+
+**VRAM 预算斗争**(4060 Laptop 8GB,xorg+gnome-shell 先占 2-3GB):
+| 配置 | 撑到 |
+|---|---|
+| 518px + submap=8 | OOM at submap 0(第一个 submap 9 帧 fit 不下) |
+| 518px + submap=4 | 34 submaps 前稳,到 35 OOM |
+| 392px + submap=4 | 31 submaps 前稳,到 32 OOM |
+| 392px + submap=4 + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` + 每 submap `empty_cache` + `--skip_dense_log` | 35 submaps,**在 submap 36 SL(4) constructor 奇异崩**(`Initial total error` 从 62 → **2447934** → `RuntimeError: SVD singular values product = 0`) |
+| 336px + submap=4 | **submap 0 OOM**(图像太小,ViT patch drops 导致某些 conv 的 padding 加分配) |
+
+最终取 392px + submap=4 + 周期 dump poses(main.py 改了,每 submap 完直接 `solver.map.write_poses_to_file` 存档)。
+
+**结果**(175 poses = 35 个 submap 的 keyframes,覆盖 bag 前 ~30%):
+| 参考 | APE rmse(m) | mean | median | max | Sim3 scale |
+|---|---|---|---|---|---|
+| finder_localization(175 paired) | **16.03** | 15.06 | 16.14 | 30.40 | 0.1932 |
+
+scale = 0.19 说明 VGGT 估的单目尺度跟真实米制差 5×(跟 MapAnything 0.96 的 stride=130 比:VGGT 因为分 submap + 内部分别估 K,每 submap 独立假设,尺度漂移更大)。
+
+**对比 MapAnything 那次**:
+- MapAnything:APE **24.6m**,33 views 一次前馈过完整 416s,尺度常数但前馈模型对 13s 大间隔假设失败
+- VGGT-SLAM:APE **16.0m** 在跑完 30% 就崩,SL(4) 后端数值爆了。**后端没救回来前馈的定位,反而先于前馈自己死掉**
+
+**核心教训**(写进 memory):
+1. **GeoScan B1 这种"驾驶走廊+均质墙面+10fps+鱼眼"的场景对 feedforward + SL(4) 双暴击**:VGGT 前馈估 K 本来就漂,submap 间 SL(4) 拟合没有公共点约束(`Not enough overlapping points to estimate scale factor, using a less restrictive mask` 刷屏),15-DoF 单应误差积累,到某个 submap 后因子图 SVD 彻底奇异。
+2. **8GB 不够**:即使 392px + submap=4 + 所有节流,也只能到 submap 36。这个系统要在 Spark 24GB+ 上跑 518px + submap=16(默认配置)才能验证其"v2 真实的 SL(4) 优化能力"——这就是 matrix 里为什么打 🟦。
+3. **HF Xet 分块下载**:`torch.hub.load_state_dict_from_url` 吃不了 Xet,curl -L 只跟到 redirect 就缺数据,必须用 `huggingface_hub.hf_hub_download()` +  `HF_ENDPOINT=hf-mirror`。这是所有后续 HF 大模型(VGGT-1B / ViT-g14 / 任何 >1GB 的)的通用做法。
+
+**产物**:`logs/vggt_slam/geoscan_B1/full/` 下 `poses.txt`(VGGT 原格式,frame_id col)、`poses_tum.txt`(真时间戳)、`console.log`、`ape.zip`、`timestamps.txt`、`pinhole_K.txt`、`images/*.png`(4082 帧 392×518 pinhole,后续可复用)。对比图 `outputs/map_comparison_vggt.png`(6 panel:slim-vdb ADE20K / limap lines / VGGT dense(skip_dense_log 所以空) / AirSLAM sparse / 三轨迹 overlay / VGGT vs finder)。
+
+**跑法**(Spark 或大 VRAM 机复用):
+```bash
+# 权重一次性就位
+bash src/VGGT-SLAM/scripts_geoscan/setup_benchmark.sh  # 在 vggt-slam:deps 容器里
+docker commit vggt_sl_setup2 vggt-slam:latest
+
+# 抽图
+src/DPVO/.venv/bin/python src/VGGT-SLAM/scripts_geoscan/extract_geoscan_images.py \
+    --bag ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48 \
+    --out_dir logs/vggt_slam/geoscan_B1/full \
+    --start_offset_s 10.0 --short_side 518
+
+# 跑 SLAM(在 Spark 上恢复默认 submap=16,--skip_dense_log 可去掉)
+bash src/VGGT-SLAM/scripts_geoscan/run_geoscan.sh all full
+
+# 评估
+evo_ape tum ~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/finder_localization.txt \
+    logs/vggt_slam/geoscan_B1/full/poses_tum.txt -s -va --t_max_diff 0.5
+```
+
+---
 
 ### 2026-04-16 — cuvslam_ros stereo VO on GeoScan B1 🟢
 
