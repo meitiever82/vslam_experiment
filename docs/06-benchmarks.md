@@ -30,7 +30,7 @@
 | droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | 🔴 2026-04-21 VO 轨迹已飞, mapper 无意义. 另外 aarch64 open3d 无 wheel 要源码编, 本次不 pursue | — | ⬜ 🟦 | ⬜ 🟦 |
 | cuvslam_ros | ⬜ | 🟢 2026-04-16 stereo VO, rectify_fisheye, APE 0.56m(122s段) | ⬜ | ⬜ |
 | DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | 🟢 2026-04-20 V1_01 APE 0.046m (1435 pairs, stride=2) | — |
-| MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |
+| MapAnything（前馈 multi-view）🟦 | 🟢 2026-04-21 Spark, 100 dense views (stride=5 前 50s): **APE Sim3 0.106m / max 0.303m**(shape 极好, 比 DPVO 60× 好), SE3 3.44m(metric_scale 4.97× 偏大, mono 固有). GLB 700MB. mb=4 memeff=True 165s 16GB VRAM. 验证 feed-forward 需要密集近邻视图(s130 稀疏失败的反面) | — | ⬜ 🟦 | — |
 | VGGT-SLAM 🟦 | 🔴 2026-04-21 mono right-cam 392px submap=4: SL(4) 后端在 submap 36 奇异崩掉,前 35 子图 175 poses APE 16.0m / max 30.4m (Sim3). 再加 SL(4) 退化和 8GB VRAM 双重上限,**Spark 上重跑 518px + submap=16** 🟦 | — | ⬜ 🟦 | — |
 | Gaussian-LIC 🟦 | — | ⬜ 🟦 即使 Spark 也要先 fork 适配 CUDA 13 / TensorRT 10 / ROS1→2 port,见 `memory/project_gaussian_lic_blockers.md` | — | — |
 | GS_ICP_SLAM 🟦 | — | — | — | ⬜ 🟦 |
