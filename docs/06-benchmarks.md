@@ -24,7 +24,7 @@
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
 | VINGS-Mono 🟦 | — | — | ⬜ 🟦 | — |
 | ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | ⬜ | ⬜ |
-| VINS-Fusion-ROS2 | ⬜ | ⬜ | ⬜ | — |
+| VINS-Fusion-ROS2 | — | 🔴 2026-04-21 stereo+IMU(两次调参都死): baseline APE 17.5m/31s; 调过 min_dist 8/max_cnt 500/F_thresh 3/flow_back 0/rate 0.5/estimate_extrinsic 0 后反而 31.5m/20s。LK 光流前端对 10fps 鱼眼+低纹理车库根本不够用,常态 1-10 特征,不是参数能救的 | ⬜ | — |
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
 | droid_w_ros2 / DROID-W(VO only, mapper off) | 🔴 2026-04-21 Spark, native uncertainty on + FiT3D + dpt2_vitl_hypersim_20, undistort balance=0.0(fx≈240). **z 漂 160m**(GT z≈0 平面), Umeyama 秩退化. APE Sim3 6.25m / SE3 40.58m 只是数字, 实际轨迹形态完全错(dy=11.7 vs GT 64, z 单调飞). mono + 学习深度在走廊/车库 fail mode. 试 vkitti depth 更差(Sim3 9.06m) | — | ⬜ | ⬜ |
 | droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | 🔴 2026-04-21 VO 轨迹已飞, mapper 无意义. 另外 aarch64 open3d 无 wheel 要源码编, 本次不 pursue | — | ⬜ 🟦 | ⬜ 🟦 |
@@ -42,6 +42,7 @@
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
 | gsplat offline 3DGS（cam0 + finder pose） | 🟡 2026-04-20 300 帧 / 115k 高斯 / 73s / peak VRAM 1.18GB / PSNR~33, 车库走廊可辨认但细节糊 — 待加 SSIM + 30k iter + SfM init | — | — | — |
 | GLIM LIO + dpvo_frontend(Scheme C 紧耦合) | 🟢 2026-04-21 早:用 Python bag_replay_monotone.py 绕开 ros2 bag play 的时序 bug,**baseline 1.88m vs +DPVO 0.73m(SE3),RMSE 提升 2.6×**(不同段对照,但趋势明确) | — | — | — |
+| GLIM LIO + cam0 RGB 彩色点云(在线 Option A) | 🟢 2026-04-21 `colored_cloud_node.py` 实时投影 LiDAR→fisheye cam0 发 `/colored_cloud`,`colored_cloud_to_ply.py` 累积落 PLY。113s bag 段 1.36M 点 / 20MB,`runs/geoscan_colored/geoscan_b1_glim_colored.ply` | — | — | — |
 
 > 单元格内容示例：`🟢 ATE 0.28m / CPU 42%` 或 `🔴 IMU init 失败，见 §2.3`
 
@@ -92,6 +93,55 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-21 下午 — VINS-Fusion-ROS2 stereo+IMU on GeoScan B1 🔴
+
+**目标**:把现成的 VINS-Fusion-ROS2(`install/vins`,`install/loop_fusion`,`install/camera_models` 早就 build 过,源码树现在有 COLCON_IGNORE)跑一把 GeoScan B1 stereo-inertial,看 VINS 的 Ceres 滑窗能不能在 10fps 鱼眼上撑住。
+
+**配置**:`config/geoscan/geoscan_stereo_imu_config.yaml`(user 已经调过 `max_cnt 300 / min_dist 15 / equalize 1` 给低纹理场景)。**关键**:config 里有 `imu_acc_scale: 9.81`,VINS 源码`vins/src/rosNodeTest.cpp:154-156` 和 `parameters.cpp:117` 会读并乘进 `imu_msg->linear_acceleration`——所以 GeoScan 的 IMU g-unit 已经被 handle 了,**不是 IMU 量级问题**。
+
+**Launch**:没走 `geoscan_stereo_imu.launch.py`(其默认开 rviz 而 `vins_rviz_config.rviz` 当前有 git 合并冲突未解),直接 `ros2 run vins vins_node <cfg>` + `ros2 run loop_fusion loop_fusion_node <cfg>` 并行。驱动脚本 `logs/vins_fusion/run_geoscan.sh`。
+
+**bag 播放**:`ros2 bag play --clock --start-offset 10`(跳开头静止段)。
+
+**结果**:
+| 指标 | 值 |
+|---|---|
+| 运行时长 | bag 全长 418s 播完 |
+| VINS 输出 poses | **145**(vio.csv) |
+| 有效覆盖 | ts 1770885781 → 812,**只有 31s**,之后 **tracking lost** |
+| 最终 n_pts | 2(健康值 > 100) |
+| APE vs finder(SE3 aligned) | **rmse 17.53m / mean 15.56m / max 38.19m** |
+| loop_fusion 输出 | 空(vio_loop.csv 0 行) |
+
+**跟丢轨迹**:init 后前 30s 缓慢爬升到 (-57, 20, 20) — x 合理但 **Z 飘到 20m**(车库是平的,应 0-3m)。随后 n_pts 崩到 2,无法 recover,bag 后面 ~370s 全没输出。
+
+**根因诊断**:
+1. **10fps + 鱼眼 + 暗车库**对 VINS 自带的 LK 光流前端太辛苦。日志里 `n_pts size: 5/4/8/11` 是常态,不够滑窗 BA 约束。对比同场景下 open_vins 0.76m / ORB_SLAM3 稳定:后者前端是 ORB 特征 + 描述子匹配,对帧间大 baseline 更鲁棒;VINS 的光流假设小位移,10fps 下直接断。
+2. **stereo 时序**:日志 `throw img0/throw img1` 反复出现——左右目 header 时间差超过 VINS 内部 sync tolerance,扔图拖累 BA。
+3. **`show_track: 1`**:启用了 OpenCV imshow 窗口,headless 运行时无害但略拖。
+
+**未做的调参**(之后回头搞或 Spark 上):
+- `freq: 10` 改 `freq: 20` 让 subpixel 平滑不受 10fps 限制
+- `F_threshold` 从 1.5 调到 3.0 放松 RANSAC
+- 换 `flow_back: 0` 关反向光流(走廊均质时反而贡献异常匹配)
+- 换 mono 模式(`num_of_cam: 1`)+ 只用 right_camera(跟 AirSLAM 已经验证能跑的一致)
+
+**结论**:**这个 bag 对 VINS-Fusion 不友好**,不是 bug 是前端假设不合。benchmark 结果 🔴 记录以示该系统在 GeoScan 类数据上不推荐,优先跑 open_vins / AirSLAM / ORB_SLAM3。
+
+**调参再尝试**(2026-04-21 下午稍晚):按照"试图让它跑完整 bag"的目标,又做了 3 轮:
+
+1. **mono + flow_back=0 + F_thresh 3 + min_dist 8 + max_cnt 500 + estimate_extrinsic 0 + bag rate 0.5 + 跳 10s 静止**:**卡在 IMU excitation not enough / Not enough parallax 死循环**,init 从不完成。mono-inertial init 在 10fps 静止+慢速车场景下不够 observability。
+2. **stereo + 同上调参 + estimate_extrinsic 0 + rate 0.5 + 跳 10s**:init 过了,但 **1.7s 后 Z 速度 -0.49m/s 下凿,到 ts 871 pose 爆到 1e176**。关掉 `estimate_extrinsic` 让 IMU bias 错误无法 in-run 补偿。
+3. **stereo + 调参 + estimate_extrinsic 0 + rate 0.5 + 保留 10s 静止**(希望静止段给 VINS 做 gyro bias 校准):init 过,**137 poses / 20s** 跟丢,位置 (-92, 61, 8)m。APE **31.5m**,比 baseline 17.5m **更差**。
+
+**用户反馈**(记 memory):"不要估计外参,这个功能不可控"——`estimate_extrinsic: 1` 在其他 VINS-Fusion 数据上工作但 GeoScan 场景下行为不稳。但关掉后需要初始化完全准确,GeoScan 慢速车无法给够 observability → 死循环。**鸡生蛋**。
+
+**最终定论**:**VINS-Fusion-ROS2 在 GeoScan B1 bag 上不可恢复**,前端和这个数据不兼容,优化方向超出参数调整范围。
+
+**产物**:`logs/vins_fusion/geoscan_B1/` 下 `vio.csv`(最后一次 137 poses)、`vio_tum.txt`、`ape.zip`(31.5m)、`vins_node.log`、`loop_fusion.log`、`bag_play.log`。另有 `config/vins_rviz_config.rviz` 有 **6 处 git 合并冲突标记未解**——和 benchmark 无关但待清理。
+
+---
 
 ### 2026-04-21 — VGGT-SLAM feedforward mono on GeoScan B1 🔴
 
