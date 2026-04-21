@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -22,7 +23,8 @@
 #include <message_filters/time_synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
 
-#include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.hpp>
+#include <opencv2/core.hpp>
 
 // cuVSLAM
 #include <cuvslam/cuvslam2.h>
@@ -102,6 +104,13 @@ private:
   bool enable_landmarks_;
   int verbosity_;
   float depth_scale_factor_;
+  std::string trajectory_output_path_;
+  std::ofstream trajectory_file_;
+
+  bool rectify_fisheye_ = false;
+  cv::Mat rect_map1_left_, rect_map2_left_;
+  cv::Mat rect_map1_right_, rect_map2_right_;
+  void compute_fisheye_rectification();
 
   // ---- cuVSLAM objects ----
   std::unique_ptr<cuvslam::Rig> rig_;

@@ -26,8 +26,8 @@
 | ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | ⬜ | ⬜ |
 | VINS-Fusion-ROS2 | ⬜ | ⬜ | ⬜ | — |
 | AirSLAM | ⬜ | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| ⬜ | — |
-| droid_w_ros2 / DROID-W(VO only, mapper off) | ⬜ 本机可试(~6-8GB, Metric3D+DINOv2+Dense BA, metric-scale 直接可用) | — | ⬜ | ⬜ |
-| droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | ⬜ 🟦(加 mapper 后 16-24GB, Spark 跑) | — | ⬜ 🟦 | ⬜ 🟦 |
+| droid_w_ros2 / DROID-W(VO only, mapper off) | 🔴 2026-04-21 Spark, native uncertainty on + FiT3D + dpt2_vitl_hypersim_20, undistort balance=0.0(fx≈240). **z 漂 160m**(GT z≈0 平面), Umeyama 秩退化. APE Sim3 6.25m / SE3 40.58m 只是数字, 实际轨迹形态完全错(dy=11.7 vs GT 64, z 单调飞). mono + 学习深度在走廊/车库 fail mode. 试 vkitti depth 更差(Sim3 9.06m) | — | ⬜ | ⬜ |
+| droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | 🔴 2026-04-21 VO 轨迹已飞, mapper 无意义. 另外 aarch64 open3d 无 wheel 要源码编, 本次不 pursue | — | ⬜ 🟦 | ⬜ 🟦 |
 | cuvslam_ros | ⬜ | 🟢 2026-04-16 stereo VO, rectify_fisheye, APE 0.56m(122s段) | ⬜ | ⬜ |
 | DPVO | 🟢 2026-04-17 mono-only, APE 0.60m (1000f) | — | 🟢 2026-04-20 V1_01 APE 0.046m (1435 pairs, stride=2) | — |
 | MapAnything（前馈 multi-view）🟦 | 🔴 2026-04-20 s130 33 views: pose-only APE 24.6m; MVS 模式(喂 finder)mesh 散乱。结论：4060 稀疏采样不适用,**Spark 上用 stride=5/2 重跑** 🟦 | — | ⬜ 🟦 | — |

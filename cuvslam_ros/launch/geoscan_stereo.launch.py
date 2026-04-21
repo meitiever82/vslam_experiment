@@ -22,13 +22,18 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('rviz', default_value='true',
                               description='Launch RViz2'),
+        DeclareLaunchArgument('trajectory_output_path', default_value='',
+                              description='Path to save TUM trajectory on shutdown'),
 
         Node(
             package='cuvslam_ros',
             executable='cuvslam_rosnode',
             name='cuvslam_ros',
             output='screen',
-            parameters=[params_file],
+            parameters=[
+                params_file,
+                {'trajectory_output_path': LaunchConfiguration('trajectory_output_path')},
+            ],
         ),
 
         Node(

@@ -6,7 +6,7 @@ cuvslam_ros:
     # Topics (B1 bag)
     left_image_topic: "/left_camera/image"
     right_image_topic: "/right_camera/image"
-    imu_topic: "/handsfree/imu"                  # 留空 = 纯双目 VO；填 IMU 话题并把 odometry_mode 改为 inertial 即启用 VIO
+    imu_topic: "/handsfree/imu_ms2"              # 经 scripts/imu_accel_g_to_ms2.py 转换 (FB100 原始 g 单位 → m/s²)
     camera_info_topic: ""
 
     # Frame IDs
@@ -31,14 +31,14 @@ cuvslam_ros:
     right_cy: 541.5480235419994
     right_distortion_coeffs: [0.017052626877708536, -0.08393575674877075, 0.07290533443221045, -0.02151514779076789]
 
-    # ---- Stereo extrinsics: rig_from_cam1 = inv(T_cn_cnm1) ----
-    # T_cn_cnm1 from kalibr = T_cam1_cam0
-    # inv: R^T, -R^T * t
-    # Rotation is near-identity, quaternion ≈ (0, 0, 0, 1)
-    rig_from_cam1_qx: 0.000353
-    rig_from_cam1_qy: -0.000443
-    rig_from_cam1_qz: 0.000349
-    rig_from_cam1_qw: 0.999999
+    # ---- Stereo extrinsics: rig_from_cam1 = T_cam0_cam1 = inv(T_cn_cnm1) ----
+    # Quaternion derived from the same rotation matrix ORB-SLAM3 uses
+    # (GeoScan_fisheye.yaml Stereo.T_c1_c2). Dominant component is a ~0.73°
+    # roll around X; prior value was missing it and caused fast tracking loss.
+    rig_from_cam1_qx: -0.006382
+    rig_from_cam1_qy:  0.000441
+    rig_from_cam1_qz: -0.000351
+    rig_from_cam1_qw:  0.999979
     rig_from_cam1_tx: 0.09738513291064156
     rig_from_cam1_ty: -0.00000849
     rig_from_cam1_tz: 0.00087507
@@ -61,7 +61,12 @@ cuvslam_ros:
     imu_frequency: 780.0    # 实测 ~780Hz (ros2 topic hz /handsfree/imu)
 
     # Tracker
-    odometry_mode: "inertial"        # "stereo" = 纯 VO; "inertial" = 双目 VIO (需同时设置 imu_topic)
+    odometry_mode: "stereo"          # 纯双目 VO (IMU 暂时不可用, 见 benchmarks.md cuvslam 条目)
     enable_slam: true
     enable_landmarks: true
     verbosity: 1
+
+    # cuVSLAM 内部对 fisheye 做 pinhole+undistort, 在 ~108° HFOV 下误差大导致 stereo
+    # matching 不稳, 轨迹跑飞. 打开下面这项用 cv::fisheye::stereoRectify 预先生成
+    # 矩形化 pinhole 图, cuvslam 当普通 pinhole 双目处理.
+    rectify_fisheye: true

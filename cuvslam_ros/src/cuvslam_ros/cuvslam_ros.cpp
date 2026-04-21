@@ -3,6 +3,8 @@
 
 #include "cuvslam_ros/cuvslam_ros.hpp"
 
+#include <iomanip>
+
 #include <Eigen/Geometry>
 #include <opencv2/opencv.hpp>
 
@@ -47,6 +49,11 @@ CuvslamROS::CuvslamROS(const rclcpp::NodeOptions& options)
 }
 
 CuvslamROS::~CuvslamROS() {
+  if (trajectory_file_.is_open()) {
+    trajectory_file_.flush();
+    trajectory_file_.close();
+    RCLCPP_INFO(get_logger(), "Closed TUM trajectory file: %s", trajectory_output_path_.c_str());
+  }
   RCLCPP_INFO(get_logger(), "Shutting down cuVSLAM ROS2 node. Processed %u frames.", frame_count_);
 }
 
@@ -104,6 +111,18 @@ void CuvslamROS::declare_parameters() {
   enable_landmarks_ = declare_parameter("enable_landmarks", false);
   verbosity_ = declare_parameter("verbosity", 1);
   depth_scale_factor_ = declare_parameter("depth_scale_factor", 1000.0f);  // RealSense: mm->m
+  trajectory_output_path_ = declare_parameter("trajectory_output_path", "");
+  rectify_fisheye_ = declare_parameter("rectify_fisheye", false);
+  if (!trajectory_output_path_.empty()) {
+    trajectory_file_.open(trajectory_output_path_);
+    if (trajectory_file_.is_open()) {
+      trajectory_file_ << "# TUM trajectory from cuvslam_ros\n# timestamp tx ty tz qx qy qz qw\n";
+      trajectory_file_ << std::fixed;
+      RCLCPP_INFO(get_logger(), "Writing TUM trajectory to: %s", trajectory_output_path_.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "Failed to open trajectory_output_path: %s", trajectory_output_path_.c_str());
+    }
+  }
 }
 
 void CuvslamROS::setup_camera_rig() {
@@ -182,6 +201,10 @@ void CuvslamROS::setup_camera_rig() {
     RCLCPP_INFO(get_logger(), "  cam1: fx=%.1f fy=%.1f cx=%.1f cy=%.1f", r_fx, r_fy, r_cx, r_cy);
     RCLCPP_INFO(get_logger(), "  baseline: [%.4f, %.4f, %.4f]",
       rig_from_cam1_tx_, rig_from_cam1_ty_, rig_from_cam1_tz_);
+
+    if (rectify_fisheye_ && distortion_model_ == "fisheye") {
+      compute_fisheye_rectification();
+    }
   }
 
   // IMU (if inertial mode)
@@ -216,6 +239,63 @@ void CuvslamROS::setup_camera_rig() {
     imu.accelerometer_random_walk = declare_parameter("accelerometer_random_walk", 3.0e-3f);
     imu.frequency = declare_parameter("imu_frequency", 200.0f);
   }
+}
+
+void CuvslamROS::compute_fisheye_rectification() {
+  cv::Mat K1 = (cv::Mat_<double>(3, 3) << fx_, 0, cx_, 0, fy_, cy_, 0, 0, 1);
+  cv::Mat D1 = (cv::Mat_<double>(4, 1) << distortion_coeffs_[0], distortion_coeffs_[1],
+                distortion_coeffs_[2], distortion_coeffs_[3]);
+  double rfx = right_fx_ > 0 ? right_fx_ : fx_;
+  double rfy = right_fy_ > 0 ? right_fy_ : fy_;
+  double rcx = right_cx_ > 0 ? right_cx_ : cx_;
+  double rcy = right_cy_ > 0 ? right_cy_ : cy_;
+  cv::Mat K2 = (cv::Mat_<double>(3, 3) << rfx, 0, rcx, 0, rfy, rcy, 0, 0, 1);
+  const auto& dr = right_distortion_coeffs_.empty() ? distortion_coeffs_ : right_distortion_coeffs_;
+  cv::Mat D2 = (cv::Mat_<double>(4, 1) << dr[0], dr[1], dr[2], dr[3]);
+
+  // We have rig_from_cam1 = T_c0_c1 (point in cam1 -> point in cam0).
+  // OpenCV stereoRectify wants R, T such that p_cam2 = R * p_cam1 + T,
+  // where (cam1, cam2) in the API == (left, right) here. So:
+  //   R_api = R_c1_c0 = R_c0_c1^T
+  //   T_api = -R_c1_c0 * t_c0_c1
+  Eigen::Quaterniond q_c0_c1(rig_from_cam1_qw_, rig_from_cam1_qx_,
+                             rig_from_cam1_qy_, rig_from_cam1_qz_);
+  q_c0_c1.normalize();
+  Eigen::Matrix3d R_c0_c1 = q_c0_c1.toRotationMatrix();
+  Eigen::Vector3d t_c0_c1(rig_from_cam1_tx_, rig_from_cam1_ty_, rig_from_cam1_tz_);
+  Eigen::Matrix3d R_c1_c0 = R_c0_c1.transpose();
+  Eigen::Vector3d t_c1_c0 = -R_c1_c0 * t_c0_c1;
+
+  cv::Mat R_cv(3, 3, CV_64F);
+  cv::Mat T_cv(3, 1, CV_64F);
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) R_cv.at<double>(i, j) = R_c1_c0(i, j);
+    T_cv.at<double>(i, 0) = t_c1_c0(i);
+  }
+
+  // Per-camera undistort to pinhole at the SAME intrinsics (no stereo rectification).
+  // OpenCV's fisheye::stereoRectify degenerates on this ~108° HFOV input. We instead
+  // undistort each fisheye image to a pinhole at the original K (R = identity), which
+  // removes the barrel distortion that breaks cuvslam's internal "pinhole+undistort"
+  // approach. The original stereo extrinsics (rig_from_cam1) stay in the cuvslam Rig.
+  (void)R_c1_c0; (void)t_c1_c0; (void)R_cv; (void)T_cv;  // unused for per-cam undistort
+  cv::Size image_size(image_width_, image_height_);
+  cv::fisheye::initUndistortRectifyMap(K1, D1, cv::Mat::eye(3, 3, CV_64F), K1,
+                                       image_size, CV_16SC2,
+                                       rect_map1_left_, rect_map2_left_);
+  cv::fisheye::initUndistortRectifyMap(K2, D2, cv::Mat::eye(3, 3, CV_64F), K2,
+                                       image_size, CV_16SC2,
+                                       rect_map1_right_, rect_map2_right_);
+
+  // Override the cuvslam Rig to use pinhole (same K, no distortion coeffs) but keep
+  // the original stereo extrinsics (already set above by the stereo branch).
+  rig_->cameras[0].distortion.model = cuvslam::Distortion::Model::Pinhole;
+  rig_->cameras[0].distortion.parameters.clear();
+  rig_->cameras[1].distortion.model = cuvslam::Distortion::Model::Pinhole;
+  rig_->cameras[1].distortion.parameters.clear();
+
+  RCLCPP_INFO(get_logger(),
+    "Fisheye undistort ON (per-camera, no rectification). cuvslam now sees pinhole stereo at original K.");
 }
 
 void CuvslamROS::setup_tracker() {
@@ -378,6 +458,14 @@ void CuvslamROS::stereo_callback(
   } catch (const cv_bridge::Exception& e) {
     RCLCPP_ERROR(get_logger(), "cv_bridge error: %s", e.what());
     return;
+  }
+
+  cv::Mat left_rect, right_rect;
+  if (!rect_map1_left_.empty()) {
+    cv::remap(left_gray, left_rect, rect_map1_left_, rect_map2_left_, cv::INTER_LINEAR);
+    cv::remap(right_gray, right_rect, rect_map1_right_, rect_map2_right_, cv::INTER_LINEAR);
+    left_gray = left_rect;
+    right_gray = right_rect;
   }
 
   // Build cuVSLAM images
@@ -789,6 +877,19 @@ void CuvslamROS::publish_odometry(const cuvslam::PoseEstimate& estimate, const r
   tf.transform.translation.z = ros_pose.position.z;
   tf.transform.rotation = ros_pose.orientation;
   tf_broadcaster_->sendTransform(tf);
+
+  if (trajectory_file_.is_open()) {
+    const double t_sec = stamp.seconds();
+    trajectory_file_ << std::setprecision(9) << t_sec << " "
+                     << std::setprecision(6)
+                     << ros_pose.position.x << " "
+                     << ros_pose.position.y << " "
+                     << ros_pose.position.z << " "
+                     << ros_pose.orientation.x << " "
+                     << ros_pose.orientation.y << " "
+                     << ros_pose.orientation.z << " "
+                     << ros_pose.orientation.w << "\n";
+  }
 }
 
 void CuvslamROS::publish_landmarks(const rclcpp::Time& stamp) {
