@@ -18,7 +18,7 @@
 
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
-| open_vins | ⬜ | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | 🟢 2026-04-22 V1_01 stereo-IMU **APE SE3 0.165m / Sim3 0.159m** (2780 poses, bag replay). workspace 重整 + `init_dyn_use: true` 后救活（原 static init 等不到 accel jerk → 94m scale drift）。另保留 4-16 ASL pub 试点 0.604m/first 2000 poses | — |
+| open_vins | 🔴 2026-04-22 mono-inertial: init OK 后发散, dist=1024m on 50m 车库 (FB100 IMU zero-DT 被 drop 致积分丢传播). bag-record 0 字节, 无 APE. 见 `memory/project_openvins_geoscan_divergence.md` | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | 🟢 2026-04-22 V1_01 stereo-IMU **APE SE3 0.165m / Sim3 0.159m** (2780 poses, bag replay). workspace 重整 + `init_dyn_use: true` 后救活（原 static init 等不到 accel jerk → 94m scale drift）。另保留 4-16 ASL pub 试点 0.604m/first 2000 poses | — |
 | sqrtVINS | ⬜ | 🔴 2026-04-22 两个 bug 叠加:(1) 我 acc 噪声单位错(pre-scale 到 m/s² 后噪声值还是 g-unit,filter 过度信任 acc)— 修完 neg depth 18633 → 99(97% 降)、前 ~100 poses 稳定;(2) sqrtVINS 内部 `stamp.sec + nsec*1e-9` 当 sec=1.77e9 时 float64 精度损,IMU 读数被误判重复剔除 1941 次 + poseimu 输出 nsec=0。修 (1) 后 filter 跑完整个 bag 3881 poses,但(2) 导致时间戳冲突累积,后期仍发散到 km 级。上游源码级 bug | 🟢 2026-04-22 V1_01_easy stereo-IMU APE SE3 **0.050m** (first 2000/2800 poses)— **paper-class + 12× 好于同设置下 open_vins 0.604m**,证实:Bug #2 的 "Zero DT" 症状 EuRoC 200Hz IMU + 1.4e9 epoch 不触发 (0 events vs GeoScan 1941),SR-VINS 后端的数值稳定性优势确实存在。GeoScan 🔴 是 2026 年 epoch × 800Hz IMU 特异上游 bug | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
@@ -1067,10 +1067,12 @@ ps -p $(pgrep -f vins_node) -o %cpu,%mem --no-headers
 - [x] 跑 `AirSLAM` 的 EuRoC V101 stereo-inertial（2026-04-22，APE SE3 0.087m / Sim3 0.085m，41.9 FPS；`plnet.use_superpoint:0` 绕开 TRT 10 SuperPoint ONNX int64/int32 bug）
 - [x] 跑 `ORB_SLAM3` 的 EuRoC V101 做横向参照（2026-04-22，APE SE3 0.082m / Sim3 0.076m，2809 poses + 108 KFs；用 `~/casbot_ws/.../orb_slam_frontend/thirdparty/ORB_SLAM3` 已有的 aarch64 binary）
 - [x] 跑 `VINS-Fusion-ROS2` 的 EuRoC V101 stereo+IMU（2026-04-22，APE SE3 0.132m / Sim3 0.117m，1446 poses；Ceres 2.2 Manifold port + cv_bridge.hpp 修正 + ts 精度 + metadata.yaml qos_profiles 修正）
+- [x] 跑 `open_vins` 的 EuRoC V101 stereo-IMU（2026-04-22，APE SE3 0.165m / Sim3 0.159m，2780 poses；workspace 重整(sqrtVINS COLCON_IGNORE) + 清 install 重编 + `init_dyn_use: true`）
+- [x] 跑 `open_vins` 的 GeoScan mono-inertial → 🔴 **发散** (dist=1024m on 50m 车库, FB100 IMU zero-DT drop 致传播丢失). bag-record 0 字节, 无 APE. 见 `memory/project_openvins_geoscan_divergence.md`
 
 ### 未完成
-- [ ] 跑 `open_vins` + `sqrtVINS` 的 GeoScan mono-inertial（共用 `ov_core`，一份 config）
-- [ ] 跑 `open_vins` + `sqrtVINS` 的 EuRoC V101（已迁 ROS 2，配置基本现成）
+- [ ] 跑 `sqrtVINS` 的 GeoScan mono-inertial（共用 `ov_core`，工作区 COLCON_IGNORE 要反转: sqrtVINS ← 恢复 / open_vins → ignore）
+- [ ] 跑 `sqrtVINS` 的 EuRoC V101（同上）
 - [ ] ~~跑 `SchurVINS` 的 EuRoC V101~~ **🔴 Ceres 2.2 API blocker** — svo_ceres_backend 里 10 个文件用 `LocalParameterization` 子类，Ubuntu 24.04 Ceres 2.2 只剩 Manifold；port 需 4-6h Jacobian 重构，见 `memory/project_schurvins_ceres22_blocker.md`
 - [ ] 跑 `VINS-Fusion-ROS2` 的 GeoScan mono（单目，光流前端；stereo 版 2026-04-21 已失败）
 - [ ] 写一个 `scripts/` 下的 `run_benchmark.sh` 批量脚本（几个系统都跑通后再做）
