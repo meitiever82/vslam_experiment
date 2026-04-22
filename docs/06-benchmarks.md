@@ -885,11 +885,19 @@ ps -p $(pgrep -f vins_node) -o %cpu,%mem --no-headers
 
 ## 待办清单
 
+### 已完成
+- [x] 跑 `AirSLAM` 的 GeoScan stereo-inertial（2026-04-16，Z 漂修复后 Z∈[0,1.1]m / 535 KF）
+- [x] 跑 `DPVO` 的 GeoScan B1 mono（2026-04-17，APE 0.60m/1000f，纯单目无尺度）
+- [x] 跑 `slim-vdb` 的 GeoScan B1（2026-04-18，LiDAR+cam+VIO 融合，82×75×16m 稠密语义体素地图）
+- [x] 跑 `cuvslam_ros` 的 GeoScan stereo-inertial（2026-04-22，试了 generic MEMS + Kalibr FB100 两套 noise, APE SE3 9.7m → 3.36m，z 漂 18m → 5m；仍不如 stereo-only 0.56m，**结论：锁 stereo-only**）
+- [x] 跑 `cuvslam_ros` 的 EuRoC V101 stereo-inertial（2026-04-22，APE SE3 0.237m / Sim3 0.228m，比 stereo-only 0.467m 好 2×，T_C0_IMU 修正后）
+- [x] 跑 `AirSLAM` 的 EuRoC V101 stereo-inertial（2026-04-22，APE SE3 0.087m / Sim3 0.085m，41.9 FPS；`plnet.use_superpoint:0` 绕开 TRT 10 SuperPoint ONNX int64/int32 bug）
+
+### 未完成
+- [ ] 跑 `ORB_SLAM3` 的 EuRoC V101 做横向参照（有真实 Vicon GT；aarch64 需重编 DBoW2+g2o+Sophus+Pangolin，多小时）
 - [ ] 跑 `open_vins` + `sqrtVINS` 的 GeoScan mono-inertial（共用 `ov_core`，一份 config）
-- [ ] 跑 `VINS-Fusion-ROS2` 的 GeoScan mono（单目，光流前端）
-- [ ] 跑 `cuvslam_ros` 的 GeoScan stereo-inertial
-- [x] 跑 `AirSLAM` 的 GeoScan stereo-inertial（2026-04-16 完成，见上）
-- [x] 跑 `DPVO` 的 GeoScan B1 mono（2026-04-17 完成，APE 0.60m/1000f，纯单目无尺度）
-- [x] 跑 `slim-vdb` 的 GeoScan B1（2026-04-18 完成，LiDAR+cam+VIO 融合，82×75×16m 稠密语义体素地图）
-- [ ] 跑 `ORB_SLAM3` 的 EuRoC V101 做横向参照（有真实 GT）
-- [ ] 写一个 `scripts/` 下的 `run_benchmark.sh` 批量脚本（待几个系统都跑通后再做）
+- [ ] 跑 `open_vins` + `sqrtVINS` 的 EuRoC V101（已迁 ROS 2，配置基本现成）
+- [ ] 跑 `SchurVINS` 的 EuRoC V101（已迁 ROS 2，未跑）
+- [ ] 跑 `VINS-Fusion-ROS2` 的 GeoScan mono（单目，光流前端；stereo 版 2026-04-21 已失败）
+- [ ] 跑 `VINS-Fusion-ROS2` 的 EuRoC V101（VINS 原生 benchmark，标定就位）
+- [ ] 写一个 `scripts/` 下的 `run_benchmark.sh` 批量脚本（几个系统都跑通后再做）
