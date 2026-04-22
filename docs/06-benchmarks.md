@@ -40,7 +40,7 @@
 | rtabmap | 在 `~/rtabmap_ws/`，独立记录 | — | — | — |
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
-| gsplat offline 3DGS（cam0 + finder pose） | 🟢 2026-04-22 300 帧 / L1+0.2·SSIM / 30k iter / 165k 高斯 / 348s / VRAM 1.25GB / **PSNR 25.43dB, SSIM 0.85**(真实 MSE,v4 的 L1-近似 PSNR~33 不可比,同 PLY 重算真实 24.72/0.84)。SfM-init 留到下次 | — | — | — |
+| gsplat offline 3DGS（cam0 + finder pose） | 🟢 2026-04-22 300 帧 / L1+0.2·SSIM / 30k iter / 165k 高斯 / 348s / VRAM 1.25GB / **PSNR 25.43dB, SSIM 0.85**(真实 MSE,v4 的 L1-近似 PSNR~33 不可比,同 PLY 重算真实 24.72/0.84)。2026-04-22 晚试了 AirSLAM 47k map points SfM init:**反而 24.37/0.84(略差)**,对齐 Sim3 RMSE 2.1m(AirSLAM 10% scale bias)系统性 ~2m 位置偏移让 densify 要花力气纠回 — 证明 SfM init 质量门槛高,下次用 COLMAP SfM 试 | — | — | — |
 | GLIM LIO + dpvo_frontend(Scheme C 紧耦合) | 🟢 2026-04-21 早:用 Python bag_replay_monotone.py 绕开 ros2 bag play 的时序 bug,**baseline 1.88m vs +DPVO 0.73m(SE3),RMSE 提升 2.6×**(不同段对照,但趋势明确) | — | — | — |
 | GLIM LIO + cam0 RGB 彩色点云(在线 Option A) | 🟢 2026-04-21 `colored_cloud_node.py` 实时投影 LiDAR→fisheye cam0 发 `/colored_cloud`,`colored_cloud_to_ply.py` 累积落 PLY。113s bag 段 1.36M 点 / 20MB,`runs/geoscan_colored/geoscan_b1_glim_colored.ply` | — | — | — |
 
@@ -93,6 +93,64 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-22 晚 — 四路 map cross-compare(slim-vdb + limap + AirSLAM + gsplat)🟢
+
+**目标**:把今天有的四种 map 产物拼一张图直观对比(同一个 GeoScan B1 bag,同一个 finder 坐标系)。之前 2026-04-18 做过三路(slim-vdb/limap/AirSLAM),这次加第四路 gsplat v5 PLY(165k 高斯,PSNR 25.43)。
+
+**改动**:`src/slim-vdb/scripts_geoscan/compare_maps.py` 加 `--gsplat_ply` 参数:
+- 新 `load_gsplat_ply()`:解析 3DGS 格式 PLY(xyz + nx/ny/nz + f_dc_0..2 + opacity + scale + rot),按 header property 顺序鲁棒解析。`f_dc` → RGB 用 3DGS paper 的 SH DC 转换 `rgb = sigmoid(f_dc * 0.28209 + 0.5)`。按 opacity 加权子采样到 `max_points`。
+- 布局:有 VGGT 或 gsplat 时从 2x2 扩到 2x3。gsplat 两个新 panel:
+  - (0,2):gsplat gaussians top-down,用 per-gaussian RGB,size ∝ opacity
+  - (1,2):Z-slice,z<0.5m 地面(橙)vs 其上(原色),看墙/柱子和地面的分离
+
+**命令**:
+```bash
+python3 src/slim-vdb/scripts_geoscan/compare_maps.py \
+  --gsplat_ply runs/geoscan_3dgs/densify_ssim_30k/point_cloud.ply \
+  --out outputs/map_comparison_gsplat.png
+```
+
+**产物**:`outputs/map_comparison_gsplat.png`(5.1 MB, 2x3 面板,dpi=150)。
+
+**数字**(单张 PNG 里):
+- slim-vdb 149,781 pts(子采样自 296 万)semantic 语义着色
+- limap 280 条 nv≥4 线段
+- AirSLAM 47,581 map points Sim3 对齐到 finder(scale 1.10 修正 AirSLAM 10% bias,RMSE 2.12m / max 4.36m)
+- gsplat 150,000 gaussians(全 165k 里 opacity 加权子采样,mean opacity 0.80)
+
+**对读图**:
+- 地图 coverage 四路高度一致(同数据同轨迹),差异在 representation
+- slim-vdb 最全覆盖(LiDAR 驱动 → 墙/地/天花板全到);limap 只有边缘线段(<300 条,比 2026-04-16 的 280 匹配);AirSLAM 稀疏但有点云 + 线段(点+线混合,VIO 视觉驱动 → 稀疏);gsplat 密集(顶灯/地面/柱子体态可辨,和渲染 PSNR 25.43 对得上)
+- AirSLAM 有明显漂移到 finder bbox 外的 outliers(~3% 在 bbox 外),主要是远距离误三角化
+
+### 2026-04-22 晚 — gsplat SfM-init(AirSLAM 47k 点)on GeoScan B1 🟡 反例
+
+**目标**:用 AirSLAM stereo-inertial 的 535 KF + 47k map points 替代 v5 的 random bbox init,期望 PSNR 从 25.43 → 27+。
+
+**工具链**(新):
+- `align_airslam_to_finder.py`:Umeyama Sim3/SE3 对齐 AirSLAM KF 轨迹到 finder。自动选 best(Sim3 若 mean err < 90% SE3)。配 0.05s 时间戳配对,342/535 KF 匹配。对齐后按 finder bbox ± 10m/6m 过滤 outlier map points。
+- `train_3dgs_densify.py --sfm_init <ply>`:加载 xyz + rgb 替代 bbox 随机洒点,per-point scale = log(KNN mean * 0.5 clipped to [0.02, 2.0])。检测到颜色全一致(`map_to_ply.cpp` 只写灰色)自动 fallback 到 mean_color。
+
+**对齐结果**:AirSLAM 有 **10% scale bias**(Sim3 scale=1.1035)vs finder LIO;Sim3 alignment residual **RMSE 2.12m / max 4.36m**(vs SE3 3.33m)。AirSLAM map points bbox 加 pad filter 后保留 46887/47581(98.5% inliers)。
+
+**训练结果 vs v5 random init 基线**:
+
+| 指标 | v5 random bbox | **v6 SfM init(AirSLAM)** | Δ |
+|---|---|---|---|
+| PSNR | **25.43 dB** | 24.37 dB | −1.06 |
+| SSIM | **0.8499** | 0.8389 | −0.011 |
+| 最终高斯数 | 165,539 | 86,690 | −78k |
+| 训练时间 | 348s | 339s | ≈ |
+| VRAM | 1.25 GB | 1.22 GB | ≈ |
+
+**结论**:**反例** — SfM-init 比 random 略差,高斯数也只长到一半。根因:AirSLAM 系统性 ~2m 位置偏移 + 10% scale bias,让 densify 策略花大量迭代把 gaussians 往正确位置"拉回",N 长不起来。Random bbox 虽起点随机,但策略有完全自由度密集化到几何表面。**SfM-init 的质量门槛很高** — 对齐 RMSE 必须 <0.5m 才有机会 beat random bbox。AirSLAM VIO drift 不满足。
+
+**下次路线**:
+1. cam0 COLMAP SfM(pycolmap 对 300 帧做 feature + BA),预期对齐好于 AirSLAM 的 VIO 轨迹 map,可能 <0.3m。
+2. 或者直接拿 AirSLAM 位姿系做 gsplat(不用 finder 位姿),避免跨坐标系对齐损失 — 要重写 prepare_3dgs_data.py 支持 AirSLAM KF pose 系。
+
+**产物**:`runs/geoscan_3dgs/sfm_init/{map_points_in_finder.ply, alignment.json}` + `runs/geoscan_3dgs/sfm_init_output/{point_cloud.ply, train_log.txt}`。
 
 ### 2026-04-22 晚 — sqrtVINS + open_vins on EuRoC V1_01_easy(干净数据反证 GeoScan Bug #2)🟢
 
