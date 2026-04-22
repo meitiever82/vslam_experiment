@@ -24,7 +24,7 @@
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
 | VINGS-Mono 🟦 | 🔴 2026-04-22 Spark, Docker + submodules 完整编(NGC 25.09 base, pip torch cu128, GTSAM vio-branch + -fpermissive, torch-scatter + CUDA 12.8 vs 13.0 mismatch patch, open3d stub). 837 帧 stride=5 pinhole, 跑完 16min 无崩, 但 DROID frontend.new_frame_added 从未触发 → mapper 0 次运行 → 无 ply/traj/c2w 输出. 和 DROID-W 一样撞 mono + wide FOV fail mode (fx≈169). image: `vings-mono-spark:with-submodules` 25.9GB | — | ⬜ 🟦 | — |
 | ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | ⬜ | ⬜ |
-| VINS-Fusion-ROS2 | — | 🔴 2026-04-21 stereo+IMU(两次调参都死): baseline APE 17.5m/31s; 调过 min_dist 8/max_cnt 500/F_thresh 3/flow_back 0/rate 0.5/estimate_extrinsic 0 后反而 31.5m/20s。LK 光流前端对 10fps 鱼眼+低纹理车库根本不够用,常态 1-10 特征,不是参数能救的 | ⬜ | — |
+| VINS-Fusion-ROS2 | — | 🔴 2026-04-21 stereo+IMU(两次调参都死): baseline APE 17.5m/31s; 调过 min_dist 8/max_cnt 500/F_thresh 3/flow_back 0/rate 0.5/estimate_extrinsic 0 后反而 31.5m/20s。LK 光流前端对 10fps 鱼眼+低纹理车库根本不够用,常态 1-10 特征,不是参数能救的 | 🟢 2026-04-22 V101 stereo+IMU **APE SE3 0.132m / Sim3 0.117m** (1446 poses). 需 Ceres 2.2 Manifold port + cv_bridge.hpp include + `ofstream.precision(9)` ts 修复 + metadata.yaml `qos_profiles: []` 修复 | — |
 | AirSLAM | — (stereo-only, mono 只用于重定位查询) | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| 🟢 2026-04-22 V101 stereo-inertial **APE SE3 0.087m / Sim3 0.085m** (274 KF / 2912 frames @ 41.9 FPS; `use_superpoint: 0` 绕开 TRT 10 SuperPoint ONNX int64/int32 bug, 用 PLNet 原生点+线检测) | — |
 | droid_w_ros2 / DROID-W(VO only, mapper off) | 🔴 2026-04-21 Spark, native uncertainty on + FiT3D + dpt2_vitl_hypersim_20, undistort balance=0.0(fx≈240). **z 漂 160m**(GT z≈0 平面), Umeyama 秩退化. APE Sim3 6.25m / SE3 40.58m 只是数字, 实际轨迹形态完全错(dy=11.7 vs GT 64, z 单调飞). mono + 学习深度在走廊/车库 fail mode. 试 vkitti depth 更差(Sim3 9.06m) | — | ⬜ | ⬜ |
 | droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | 🔴 2026-04-21 VO 轨迹已飞, mapper 无意义. 另外 aarch64 open3d 无 wheel 要源码编, 本次不 pursue | — | ⬜ 🟦 | ⬜ 🟦 |
@@ -941,12 +941,12 @@ ps -p $(pgrep -f vins_node) -o %cpu,%mem --no-headers
 - [x] 跑 `cuvslam_ros` 的 GeoScan stereo-inertial（2026-04-22，试了 generic MEMS + Kalibr FB100 两套 noise, APE SE3 9.7m → 3.36m，z 漂 18m → 5m；仍不如 stereo-only 0.56m，**结论：锁 stereo-only**）
 - [x] 跑 `cuvslam_ros` 的 EuRoC V101 stereo-inertial（2026-04-22，APE SE3 0.237m / Sim3 0.228m，比 stereo-only 0.467m 好 2×，T_C0_IMU 修正后）
 - [x] 跑 `AirSLAM` 的 EuRoC V101 stereo-inertial（2026-04-22，APE SE3 0.087m / Sim3 0.085m，41.9 FPS；`plnet.use_superpoint:0` 绕开 TRT 10 SuperPoint ONNX int64/int32 bug）
+- [x] 跑 `ORB_SLAM3` 的 EuRoC V101 做横向参照（2026-04-22，APE SE3 0.082m / Sim3 0.076m，2809 poses + 108 KFs；用 `~/casbot_ws/.../orb_slam_frontend/thirdparty/ORB_SLAM3` 已有的 aarch64 binary）
+- [x] 跑 `VINS-Fusion-ROS2` 的 EuRoC V101 stereo+IMU（2026-04-22，APE SE3 0.132m / Sim3 0.117m，1446 poses；Ceres 2.2 Manifold port + cv_bridge.hpp 修正 + ts 精度 + metadata.yaml qos_profiles 修正）
 
 ### 未完成
-- [ ] 跑 `ORB_SLAM3` 的 EuRoC V101 做横向参照（有真实 Vicon GT；aarch64 需重编 DBoW2+g2o+Sophus+Pangolin，多小时）
 - [ ] 跑 `open_vins` + `sqrtVINS` 的 GeoScan mono-inertial（共用 `ov_core`，一份 config）
 - [ ] 跑 `open_vins` + `sqrtVINS` 的 EuRoC V101（已迁 ROS 2，配置基本现成）
-- [ ] 跑 `SchurVINS` 的 EuRoC V101（已迁 ROS 2，未跑）
+- [ ] ~~跑 `SchurVINS` 的 EuRoC V101~~ **🔴 Ceres 2.2 API blocker** — svo_ceres_backend 里 10 个文件用 `LocalParameterization` 子类，Ubuntu 24.04 Ceres 2.2 只剩 Manifold；port 需 4-6h Jacobian 重构，见 `memory/project_schurvins_ceres22_blocker.md`
 - [ ] 跑 `VINS-Fusion-ROS2` 的 GeoScan mono（单目，光流前端；stereo 版 2026-04-21 已失败）
-- [ ] 跑 `VINS-Fusion-ROS2` 的 EuRoC V101（VINS 原生 benchmark，标定就位）
 - [ ] 写一个 `scripts/` 下的 `run_benchmark.sh` 批量脚本（几个系统都跑通后再做）
