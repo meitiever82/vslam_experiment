@@ -61,7 +61,7 @@ cuvslam_ros:
     imu_frequency: 780.0    # 实测 ~780Hz (ros2 topic hz /handsfree/imu)
 
     # Tracker
-    odometry_mode: "stereo"          # 纯双目 VO (IMU 暂时不可用, 见 benchmarks.md cuvslam 条目)
+    odometry_mode: "inertial"          # 纯双目 VO (IMU 暂时不可用, 见 benchmarks.md cuvslam 条目)
     enable_slam: true
     enable_landmarks: true
     verbosity: 1

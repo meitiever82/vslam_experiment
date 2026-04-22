@@ -1,0 +1,64 @@
+# EuRoC V101 stereo config for cuvslam_ros.
+# Raw unrectified images on topics /cam0/image_raw /cam1/image_raw from v101.db3.
+# Calibration: plumb_bob (brown) from EuRoC dataset standard values.
+
+cuvslam_ros:
+  ros__parameters:
+    # Topics (EuRoC v101.db3 bag)
+    left_image_topic: "/cam0/image_raw"
+    right_image_topic: "/cam1/image_raw"
+    imu_topic: "/imu0"
+    camera_info_topic: ""
+
+    # Frame IDs
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+    camera_frame_id: "camera_link"
+
+    # ---- Left camera (cam0) intrinsics, Skybotix WVGA ----
+    image_width: 752
+    image_height: 480
+    fx: 458.654
+    fy: 457.296
+    cx: 367.215
+    cy: 248.375
+    distortion_model: "brown"
+    # plumb_bob [k1, k2, p1, p2, k3]
+    distortion_coeffs: [-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05, 0.0]
+
+    # ---- Right camera (cam1) intrinsics ----
+    right_fx: 457.587
+    right_fy: 456.134
+    right_cx: 379.999
+    right_cy: 255.238
+    right_distortion_coeffs: [-0.28368365, 0.07451284, -0.00010473, -3.5559070e-05, 0.0]
+
+    # ---- Stereo extrinsics rig_from_cam1 (T_C0_C1; cam1 frame in cam0 frame) ----
+    # EuRoC standard: ~0.11m baseline along +x, rotation near identity.
+    rig_from_cam1_qx: 0.000499
+    rig_from_cam1_qy: -0.000778
+    rig_from_cam1_qz: 0.000994
+    rig_from_cam1_qw: 0.999999
+    rig_from_cam1_tx: 0.110074
+    rig_from_cam1_ty: -0.000158
+    rig_from_cam1_tz: -0.000828
+
+    # ---- IMU extrinsics rig_from_imu = T_C0_IMU = inv(T_B_C0) from EuRoC sensor.yaml ----
+    rig_from_imu_qx: 0.007707180
+    rig_from_imu_qy: -0.010499323
+    rig_from_imu_qz: -0.701752800
+    rig_from_imu_qw: 0.712301461
+    rig_from_imu_tx: 0.065222910
+    rig_from_imu_ty: -0.020706385
+    rig_from_imu_tz: -0.008054602
+
+    # EuRoC ADIS16448 IMU noise params (paper values)
+    gyroscope_noise_density: 1.6968e-4
+    gyroscope_random_walk: 1.9393e-5
+    accelerometer_noise_density: 2.0e-3
+    accelerometer_random_walk: 3.0e-3
+
+    odometry_mode: "inertial"  # stereo-inertial
+    enable_stereo_rectification: true
+    rectify_fisheye: false
+    debug_mode: false
