@@ -19,7 +19,7 @@
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
 | open_vins | ⬜ | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | ⬜ | — |
-| sqrtVINS | ⬜ | ⬜ | ⬜ | — |
+| sqrtVINS | ⬜ | 🔴 2026-04-22 stereo+IMU 发散:3 套 config(tuned ZUPT / euroc defaults / calib-refine off)都线性飞到 km 级。18633 次 `Negative depth detected` — 立体三角化全被拒,filter 退化成纯 IMU 积分。open_vins 同标定 0.76m ok,是 SR-VINS 后端的某个约束在这个 10fps 鱼眼 + FB100 高噪声 IMU 组合下收敛不住,非 config 问题。构件齐了待续调 | ⬜ | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
 | VINGS-Mono 🟦 | 🔴 2026-04-22 Spark, Docker + submodules 完整编(NGC 25.09 base, pip torch cu128, GTSAM vio-branch + -fpermissive, torch-scatter + CUDA 12.8 vs 13.0 mismatch patch, open3d stub). 837 帧 stride=5 pinhole, 跑完 16min 无崩, 但 DROID frontend.new_frame_added 从未触发 → mapper 0 次运行 → 无 ply/traj/c2w 输出. 和 DROID-W 一样撞 mono + wide FOV fail mode (fx≈169). image: `vings-mono-spark:with-submodules` 25.9GB | — | ⬜ 🟦 | — |
@@ -93,6 +93,42 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-22 下午 — sqrtVINS (ov_srvins) stereo+IMU on GeoScan B1 🔴
+
+**目标**:拿 sqrtVINS 的平方根 KF 后端和 open_vins 的 MSCKF 对照(同一家 Delaware RPNG,共用 `ov_core`),看 SR-VINS 数值稳定性是否在这个 10fps 鱼眼 + FB100 高噪声 IMU 场景下给出优于 open_vins 0.76m 的结果。
+
+**构件**(都已落地保留):
+- `src/sqrtVINS/config/geoscan/{estimator_config.yaml, kalibr_imucam_chain.yaml, kalibr_imu_chain.yaml}` — 标定用 `T_imu_cam = inv(Kalibr T_cam_imu)` + FB100 噪声 ×3 + 鱼眼 `equidistant` 模型
+- `logs/sqrtvins/scale_imu.py` — `/handsfree/imu`(g-unit)→ `/imu_scaled`(m/s²) ×9.81 republish(openvins 系无 `imu_acc_scale` 开关,只能 ROS 层转)
+- `logs/sqrtvins/dump_pose.py` — 订 `/poseimu` 落 TUM,timestamp 用 int-sec + 9 位 ns 避免 float64 精度损
+- `logs/sqrtvins/run_geoscan.sh` — 驱动:scaler + dumper + `ros2 run ov_srvins run_subscribe_msckf` + `ros2 bag play`
+
+**构建踩坑**:
+1. **`ov_core` 重名** — sqrtVINS 和 open_vins 各自带一份 `ov_core`,colcon 不允许重名包。`src/open_vins/COLCON_IGNORE` + `src/map-anything.git/COLCON_IGNORE`(后者 `setup.py` 让 colcon identification 炸 `SyntaxError`)才能正常 build
+2. **Humble 下 `image_transport` segfault** — `ROS2Visualizer` 里 `ImageTransport` 是 ctor 栈局部,ctor 退出后被销毁,但后台 `std::thread` 在每 50ms 跑 `publish_images()` 访问 `it_pub_tracks`,这时已是悬垂指针。**关 `multi_threading_pubs: false`** 绕开(我们不需要 track 可视化图片)
+3. **必填参数 `record_timing_filepath`** — 配缺就 "unable to parse all parameters" 但不提示哪个,得翻 log 定位
+4. **topic 命名空间** — `ros2 run ov_srvins run_subscribe_msckf` 绕过 `subscribe.launch.py`,发布 topic 没 `ov_srvins/` 前缀,订 `/poseimu` 不是 `/ov_srvins/poseimu`
+5. **stdout 行缓冲** — C++ 进程重定向到文件时是块缓冲,`kill` 时丢 buffer。用 `stdbuf -oL -eL` 强制行缓冲才能看到日志
+
+**失败模式**:所有 3 套配置全都线性发散到 km 级,**不是 OOM / init failed / segfault,是 filter 数值爆掉**:
+
+| 配置 | 关键参数 | 最终 dist (m) | pose 数 |
+|---|---|---|---|
+| v1 ZUPT + 低阈值 | `try_zupt: true, init_imu_thresh: 0.5, zupt_only_at_beginning: true` | 300,000+ | 134 |
+| v2 euroc defaults | `try_zupt: false, init_imu_thresh: 2.0, calib_cam_extrinsics: true` | 14,000+ | 200+ |
+| v3 defaults + calib fixed | v2 基础上 `calib_cam_extrinsics: false, calib_cam_intrinsics: false` | 77,000+ | 1366 |
+
+**根因诊断**(srvins.log 里 18633 次 `Negative depth detected`):立体三角化在初始化 1-2 秒后就全军覆没,filter 丢失视觉约束,**退化成纯 IMU dead-reckoning**,FB100 bias 一步步累积 → Z 方向以 10-20m/step 匀速漂,q 也跟着乱转。原因猜测:
+1. SR-VINS 后端对初始化几何精度更敏感,在 10fps + 近针孔鱼眼 + 低基线 (9.7cm) 的组合下容易进入奇异 Jacobian 状态
+2. FB100 在静止段 `|acc|≈1.07g`(理想 1.00g)→ 7% 偏差,最终 `ba_z=0.84 m/s²`,bg 也飘到 2.3°/s/轴 — filter 估得到但补偿不及时就炸了
+3. stereo 时间戳同步可能比 VINS-Fusion 更严格,10fps 下左右目 header 差值常超过 sqrtVINS 内部 sync tolerance,导致图像被丢
+
+**open_vins(MSCKF,同 bag + 同标定) 0.76m 收敛**,说明calib 和 IMU 都没问题,**是 SR-VINS 这个后端的某个收敛约束在当前传感器组合下不合**。
+
+**结论**:**不花更多本机时间调这个**。open_vins 已经作为 stereo-IMU 里 "ov_core 系" 的代表给了 0.76m,sqrtVINS 在本 bag 目前状态 🔴,构件(build + config + script)齐全落地留待:
+- 换数据(EuRoC V1 / Mars rover 这类"干净"场景)看是否一切如常 — 会区分"sqrtVINS 本身实现问题"vs"GeoScan 特别不合"
+- 或在 Spark 上启 `calib_imu_intrinsics: true` + `init_dyn_use: true` 深调(更多 CPU 空间)
 
 ### 2026-04-22 — gsplat offline 3DGS 收尾(L1+SSIM + 30k iter)🟢
 
