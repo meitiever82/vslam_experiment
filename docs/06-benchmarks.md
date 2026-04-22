@@ -984,9 +984,75 @@ ps -p $(pgrep -f vins_node) -o %cpu,%mem --no-headers
 
 ---
 
-## 横向对比结论（跑完后填）
+## 横向对比结论（2026-04-22 首版）
 
-（先空着，跑到 3+ 系统后再补此节）
+**本节基于 2026-04-22 session 在 Spark（aarch64, Ubuntu 24.04, ROS 2 Jazzy, CUDA 13, Ceres 2.2）上跑通的系统**。
+
+### EuRoC V1_01 stereo-inertial 主桌面（Vicon GT, 147s, 2912 stereo pairs）
+
+| 系统 | APE SE3 (m) | APE Sim3 (m) | poses | 类型 | 备注 |
+|---|---|---|---|---|---|
+| MapAnything | **0.0066** | **0.00084** | 100 | feed-forward 多视图 | 只跑前 100 帧（窄 FOV 室内），scale 3.35× 偏大但极小绝对误差 |
+| DPVO | — | 0.046 | 1435 | mono | stride=2，无 IMU / 无 metric scale，用 Sim3 能到 4.6cm |
+| **ORB_SLAM3** | **0.082** | 0.076 | 2809 | 经典 stereo-inertial | 基线参考；aarch64 binary 直接复用 `~/casbot_ws/.../orb_slam_frontend/` 的预编译 |
+| **AirSLAM** | 0.087 | 0.085 | 274 KF | stereo-inertial 线+点 | 41.9 FPS；需 `plnet.use_superpoint:0` 绕 TRT 10 SuperPoint ONNX bug |
+| **VINS-Fusion** | 0.132 | 0.117 | 1446 | stereo+IMU Ceres 滑窗 | 今天新跑通，Ceres 2.2 Manifold port 后 |
+| cuvslam | 0.237 | 0.228 | 2876 | GPU VIO，stereo-inertial | `odometry_mode: "inertial"` + T_C0_IMU 修正后 |
+
+**第一档**（<10cm）：
+- **ORB_SLAM3 最佳经典 VIO**（0.076m Sim3），AirSLAM 紧跟（0.085m）——**两者差 ≈ 10%**，和公开文献的 V101 ATE ~0.06–0.10m 一致，说明 Spark aarch64 port 没掉精度。
+- **MapAnything feed-forward 打过所有传统 VIO**：Sim3 0.84mm 是传统 VIO 的 1/100，但这是在 **100 帧窄 FOV** 这个对它最有利的 corner case；扩到全长或换成 fisheye 前面还没验证。
+
+**第二档**（10-25cm）：
+- **VINS-Fusion 0.117m** 略差于 AirSLAM，可能原因：(a) LK 光流前端对 EuRoC 走廊/穿梭场景中的小基线立体约束不如 ORB/点线 feature-based 稳，(b) Ceres 2.2 Manifold port 后 MinusJacobian 用的是 `[I|0]` 伪逆近似，某些 loss 类型可能引入微小误差——但 0.13m 和业界 VINS-Fusion V101 的报告（~0.10–0.20m）仍在同量级。
+- **cuvslam 0.237m**：GPU VIO，2876 poses。比业界报告的 cuVSLAM V101（常 ~0.08m）差 3×。本 session 已确认 T_C0_IMU 修正后 IMU 带来 2× 提升（stereo-only 0.467m → stereo-inertial 0.237m），但 cuvslam 15.0 的 inertial 初始化 + plumb_bob 畸变处理仍不如传统 Ceres 滑窗稳。
+
+### GeoScan B1 stereo-inertial（车库 418s，10fps 鱼眼 1280×1024）
+
+| 系统 | APE SE3 (m) | 备注 |
+|---|---|---|
+| open_vins | 0.76 | 2026-04-16 stereo-IMU，finder GT |
+| **AirSLAM** | 🟢（Z 漂已修复）| 535 KF，具体 ATE 未列 |
+| cuvslam stereo-only | **0.56** (122s 段) | 最稳档 |
+| cuvslam inertial (Kalibr FB100) | 3.36 | 加 IMU 反变差 6×，见 fail mode |
+| DPVO mono | 0.60 (1000f) | 无 metric scale |
+| MapAnything (100 dense views) | **0.106 Sim3** | 超好 shape，但 metric scale 4.97× 偏大 |
+| VINGS-Mono / DROID-W (mono) | 🔴 完全飞 | 车库+wide FOV+learned depth 普遍 fail |
+
+**跨数据集观察**：
+- **GeoScan >> EuRoC 的绝对精度差距**（2-10× 更差）——主要因为 (a) 10fps 鱼眼 1280×1024 vs EuRoC 20fps pinhole 752×480 的信息密度差，(b) 车库低纹理 + 昏暗光，(c) FB100 IMU 噪声（今天 session 用 Kalibr 真值后仍不理想），(d) GT 用 finder 而非 Vicon。
+- **feed-forward 学习派在 GeoScan 意外活得好**：MapAnything 0.106m 打爆 cuvslam inertial 3.36m，说明稠密几何先验（cross-view attention）在恶劣条件下比 IMU 积分稳。但**只对 short-horizon** 工作（100 dense views ≈ 10s）。
+
+### aarch64 + Ubuntu 24.04 共性坑（复用清单）
+本 session 累积了几个可复用的 port 配方：
+
+1. **Ceres 2.2 API 破裂**（Ubuntu 24.04 默认）：
+   - `LocalParameterization` → `Manifold`
+   - `SetParameterization` → `SetManifold`
+   - `AutoDiffLocalParameterization` → `AutoDiffManifold`（functor 要加 `Minus<T>()`）
+   - `ceres::QuaternionParameterization` → `ceres::QuaternionManifold`
+   - `EigenQuaternionParameterization` → `EigenQuaternionManifold`
+   - 自定义子类需实现 `Plus / PlusJacobian / Minus / MinusJacobian` + `AmbientSize / TangentSize`
+   - 已 port：VINS-Fusion（1h，`memory/project_vins_fusion_ceres22_port.md`）
+   - 已阻塞：SchurVINS（10 文件 deep refactor，`memory/project_schurvins_ceres22_blocker.md`）
+   - 未验证：PL-VINS / EPLF-VINS（预期同类问题）
+
+2. **cv_bridge 头文件改名**：`cv_bridge/cv_bridge.h` → `cv_bridge/cv_bridge.hpp`（Jazzy 只留 `.hpp`）
+
+3. **TRT 10 ONNX Int64/Int32 严格**（原 TRT 8 宽松）：SuperPoint、某些动态形状 export 的 onnx 会因 `Concat` mixed-type 挂掉；bypass 是切到不同的 onnx（如 LightGlue 版）或 `use_superpoint:0`（AirSLAM recipe）
+
+4. **aarch64 SSE/SSSE3 标志不支持**：老代码里 `-mmmx -msse -msse2 -msse3 -mssse3 -mno-avx` 要改成 `CMAKE_SYSTEM_PROCESSOR` 分支，armv8 NEON 默认可用；不要用 armv7 的 `-mfpu=neon -march=armv7-a`（aarch64 不认 `-mfpu`）
+
+5. **rosbag2 metadata yaml-cpp `''`→`[]`**：老 bag 的 `offered_qos_profiles: ''` 被 Jazzy yaml-cpp 拒收，需 sed 替换为 `[]`
+
+6. **ROS 1 → ROS 2 Humble/Jazzy 的批量模式**（PL-VINS / SchurVINS / AirSLAM session 累积）：`ros::NodeHandle` → `rclcpp::Node`，`nh.param` → `declare_parameter + get_parameter`，threading model 改 `CallbackGroup + MultiThreadedExecutor`，logging macro 映射，topic 路径数字段限制等。
+
+### 下一步建议
+- **最有价值**：port PL-VINS / EPLF-VINS 到 Ceres 2.2（复用 VINS-Fusion 的 port 模板），把 EuRoC V101 的 stereo+IMU 阵容补齐到 6-7 个
+- **open_vins workspace 重整**：当前 COLCON_IGNORE + sqrtVINS 包名冲突导致 install/src 混用，需清空 install 并重整后重建才能稳
+- **SchurVINS Ceres 2.2 port**：4-6h 专门工作，独立一个 session 做
+- **GeoScan mono-inertial 列**：`open_vins`（GeoScan 已有 0.76m stereo 基线，补 mono 对照）+ `sqrtVINS`（可能命中 Ceres 2.2）
+- **TUM RGB-D 数据集**：还没开始，作为第二个 "有真 GT" 的数据集补位
 
 ---
 
