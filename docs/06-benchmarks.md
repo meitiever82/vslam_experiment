@@ -18,7 +18,7 @@
 
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
-| open_vins | 🟢 2026-04-16 APE 0.76m vs finder (SE3) | ⬜ | ⬜ | — |
+| open_vins | ⬜ | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | ⬜ | — |
 | sqrtVINS | ⬜ | ⬜ | ⬜ | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
@@ -40,7 +40,7 @@
 | rtabmap | 在 `~/rtabmap_ws/`，独立记录 | — | — | — |
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
-| gsplat offline 3DGS（cam0 + finder pose） | 🟡 2026-04-20 300 帧 / 115k 高斯 / 73s / peak VRAM 1.18GB / PSNR~33, 车库走廊可辨认但细节糊 — 待加 SSIM + 30k iter + SfM init | — | — | — |
+| gsplat offline 3DGS（cam0 + finder pose） | 🟢 2026-04-22 300 帧 / L1+0.2·SSIM / 30k iter / 165k 高斯 / 348s / VRAM 1.25GB / **PSNR 25.43dB, SSIM 0.85**(真实 MSE,v4 的 L1-近似 PSNR~33 不可比,同 PLY 重算真实 24.72/0.84)。SfM-init 留到下次 | — | — | — |
 | GLIM LIO + dpvo_frontend(Scheme C 紧耦合) | 🟢 2026-04-21 早:用 Python bag_replay_monotone.py 绕开 ros2 bag play 的时序 bug,**baseline 1.88m vs +DPVO 0.73m(SE3),RMSE 提升 2.6×**(不同段对照,但趋势明确) | — | — | — |
 | GLIM LIO + cam0 RGB 彩色点云(在线 Option A) | 🟢 2026-04-21 `colored_cloud_node.py` 实时投影 LiDAR→fisheye cam0 发 `/colored_cloud`,`colored_cloud_to_ply.py` 累积落 PLY。113s bag 段 1.36M 点 / 20MB,`runs/geoscan_colored/geoscan_b1_glim_colored.ply` | — | — | — |
 
@@ -93,6 +93,54 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-22 — gsplat offline 3DGS 收尾(L1+SSIM + 30k iter)🟢
+
+**目标**:把 2026-04-20 🟡 基线(L1-only, 15k iter, 报"PSNR~33")推到 paper 默认配置(L1+SSIM, 30k iter),出最终 benchmark 数字并收尾。
+
+**改动**(`src/vslam_experiment/scripts/gsplat/train_3dgs_densify.py`):
+1. 原 `ssim_loss()` 是 L1 占位(注释里明写"避免 kernel rewrite,用 L1 顶着")。换成真 11×11 Gaussian 窗口 SSIM(纯 PyTorch `conv2d`,~20 LOC,核缓存)。`fused-ssim` 没 PyPI wheel,git 源码编译太慢,**纯 PyTorch 在 30k iter / 350s 总耗时里完全够用**,不值得折腾 CUDA 扩展。
+2. Loss 改为 `(1-λ)·L1 + λ·(1-SSIM)`,`λ=0.2`(paper 默认),加 `--ssim_lambda` 参数。
+3. `--iters 30000`。
+4. **关键修复**:原 per-iter 日志的 PSNR 是 `-20*log10(ema_L1)` — 这不是真 PSNR(PSNR 要 MSE 不是 L1)。约高估 ~1.9 dB,再加上是单随机 view 的 ema,之前矩阵里"PSNR~33"是错的。改成真 MSE-based PSNR。
+5. 训练结束后加一遍全 300 views 的 eval pass,输出 mean PSNR + mean SSIM 作为 benchmark 数字。
+6. 新增 `eval_3dgs_ply.py` 独立 eval 脚本,可以加载 `.ply` 重算真 PSNR/SSIM(用来回测 v4 PLY 的真实表现)。
+
+**命令**:
+```bash
+python3 src/vslam_experiment/scripts/gsplat/train_3dgs_densify.py \
+  --data runs/geoscan_3dgs \
+  --out runs/geoscan_3dgs/densify_ssim_30k \
+  --iters 30000 --ssim_lambda 0.2
+```
+
+**结果(真实 MSE-PSNR + 窗口 SSIM,300 views 平均)**:
+
+| 指标 | v4(L1 only, 15k iter)| **v5(L1+0.2·SSIM, 30k iter)** | Δ |
+|---|---|---|---|
+| PSNR | 24.72 dB | **25.43 dB** | +0.71 |
+| SSIM | 0.8400 | **0.8499** | +0.0099 |
+| 高斯数 | 115,974 | **165,539** | +49,565 |
+| 训练时间 | 73 s | 348 s | +275s |
+| 峰值 VRAM | 1.18 GB | 1.25 GB | +0.07 |
+| PLY 大小 | 19 MB | 27 MB | +8 |
+
+**老数字怎么错的**:v4 训练日志里的 `psnr~33` 来自 `-20*log10(L1_ema)`,这是 L1 近似,不是真 PSNR。用 v4 的 `point_cloud.ply` 重跑真 eval pass:**真实 PSNR 只有 24.72**,SSIM 0.84。所以 v5 提升不是"33→25",而是"**24.72→25.43**",小但真实。
+
+**为什么提升有限(~0.7 dB)**:两个 lever 在这次都没动:
+- **随机 bbox init**:165k 高斯还是从随机点(+mean_color)开始。Paper 初始化用 COLMAP / SfM 稀疏点云,起点就贴着几何。想继续涨 PSNR,必须把 AirSLAM/ORB_SLAM3 的 map-points 导出作初始 gaussians — 这是下次主要工作。
+- **图像本身**:GeoScan cam0 是鱼眼 → pinhole undistort 之后边缘有扭曲残差,加上车库暗 + 低纹理,PSNR 天花板本身就不高。
+
+**产物**:
+- `~/vslam_ws/runs/geoscan_3dgs/densify_ssim_30k/point_cloud.ply`(27 MB)
+- `train_log.txt` / `console.log` / `render_val_*.jpg`(0→30k 每 2k 一张)
+- v4 的 `densify_output/point_cloud.ply` 留着作对照(19 MB)
+
+**SfM-init 路线(下次做)**:
+1. AirSLAM stereo-inertial 产物 `AirSLAM_mapv0.bin` 已有 `map_to_ply.cpp` 可导出 → 3D point + RGB(从 KF 反投影)。
+2. 位姿系对齐:AirSLAM 轨迹 vs finder 轨迹,用前 10s 静止段对齐到同一 world。
+3. 把导出的 ~10k-50k map points 当 gaussians 初始位置,color = 反投影 RGB,scale 基于 KNN 距离(paper 做法)。
+4. 重训 30k iter L1+SSIM,目标 PSNR ≥ 27 dB。
 
 ### 2026-04-21 下午 — VINS-Fusion-ROS2 stereo+IMU on GeoScan B1 🔴
 
