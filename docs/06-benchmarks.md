@@ -19,7 +19,7 @@
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
 | open_vins | ⬜ | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | ⬜ | — |
-| sqrtVINS | ⬜ | 🔴 2026-04-22 stereo+IMU 发散:3 套 config(tuned ZUPT / euroc defaults / calib-refine off)都线性飞到 km 级。18633 次 `Negative depth detected` — 立体三角化全被拒,filter 退化成纯 IMU 积分。open_vins 同标定 0.76m ok,是 SR-VINS 后端的某个约束在这个 10fps 鱼眼 + FB100 高噪声 IMU 组合下收敛不住,非 config 问题。构件齐了待续调 | ⬜ | — |
+| sqrtVINS | ⬜ | 🔴 2026-04-22 两个 bug 叠加:(1) 我 acc 噪声单位错(pre-scale 到 m/s² 后噪声值还是 g-unit,filter 过度信任 acc)— 修完 neg depth 18633 → 99(97% 降)、前 ~100 poses 稳定;(2) sqrtVINS 内部 `stamp.sec + nsec*1e-9` 当 sec=1.77e9 时 float64 精度损,IMU 读数被误判重复剔除 1941 次 + poseimu 输出 nsec=0。修 (1) 后 filter 跑完整个 bag 3881 poses,但(2) 导致时间戳冲突累积,后期仍发散到 km 级。上游源码级 bug | ⬜ | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
 | VINGS-Mono 🟦 | 🔴 2026-04-22 Spark, Docker + submodules 完整编(NGC 25.09 base, pip torch cu128, GTSAM vio-branch + -fpermissive, torch-scatter + CUDA 12.8 vs 13.0 mismatch patch, open3d stub). 837 帧 stride=5 pinhole, 跑完 16min 无崩, 但 DROID frontend.new_frame_added 从未触发 → mapper 0 次运行 → 无 ply/traj/c2w 输出. 和 DROID-W 一样撞 mono + wide FOV fail mode (fx≈169). image: `vings-mono-spark:with-submodules` 25.9GB | — | ⬜ 🟦 | — |
@@ -111,24 +111,32 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 4. **topic 命名空间** — `ros2 run ov_srvins run_subscribe_msckf` 绕过 `subscribe.launch.py`,发布 topic 没 `ov_srvins/` 前缀,订 `/poseimu` 不是 `/ov_srvins/poseimu`
 5. **stdout 行缓冲** — C++ 进程重定向到文件时是块缓冲,`kill` 时丢 buffer。用 `stdbuf -oL -eL` 强制行缓冲才能看到日志
 
-**失败模式**:所有 3 套配置全都线性发散到 km 级,**不是 OOM / init failed / segfault,是 filter 数值爆掉**:
+**调参演进**(8 个 config,最后两个 bug 被定位):
 
-| 配置 | 关键参数 | 最终 dist (m) | pose 数 |
+| 版本 | 关键变化 | Neg depth 次数 | 最大发散 |
 |---|---|---|---|
-| v1 ZUPT + 低阈值 | `try_zupt: true, init_imu_thresh: 0.5, zupt_only_at_beginning: true` | 300,000+ | 134 |
-| v2 euroc defaults | `try_zupt: false, init_imu_thresh: 2.0, calib_cam_extrinsics: true` | 14,000+ | 200+ |
-| v3 defaults + calib fixed | v2 基础上 `calib_cam_extrinsics: false, calib_cam_intrinsics: false` | 77,000+ | 1366 |
+| v1 ZUPT + 低阈值 | `try_zupt: true, init_imu_thresh: 0.5` | - | 300,000m |
+| v2 euroc defaults | `try_zupt: false, init_imu_thresh: 2.0, calib_cam_extrinsics: true` | - | 14,000m |
+| v3 defaults + calib fixed | v2 + `calib_cam_extrinsics: false` | **18,633** | 77,000m |
+| v4 MSCKF mode | `max_slam: 0`(只 MSCKF features,skip SLAM) | 0 | 没 init(默认阈值过高) |
+| v5 acc 噪声 ×9.81 | **kalibr_imu_chain.yaml `acc_n/acc_w` × 9.81** | **473** (−97%) | 轨迹稳定但 init 晚 |
+| v6 v5 + 低 init_imu_thresh | `init_imu_thresh: 1.0` | 4634 | 振荡 bimodal |
+| v7 v5 回退 thresh=2.0 | noise fix but threshold high | 0 | 0 pose 未 init |
+| v8 `init_dyn_use: true` | 视觉-惯性 BA 初始化 + thresh=1.0 | **99** | 前 100 poses 稳定(<25m)后发散 |
 
-**根因诊断**(srvins.log 里 18633 次 `Negative depth detected`):立体三角化在初始化 1-2 秒后就全军覆没,filter 丢失视觉约束,**退化成纯 IMU dead-reckoning**,FB100 bias 一步步累积 → Z 方向以 10-20m/step 匀速漂,q 也跟着乱转。原因猜测:
-1. SR-VINS 后端对初始化几何精度更敏感,在 10fps + 近针孔鱼眼 + 低基线 (9.7cm) 的组合下容易进入奇异 Jacobian 状态
-2. FB100 在静止段 `|acc|≈1.07g`(理想 1.00g)→ 7% 偏差,最终 `ba_z=0.84 m/s²`,bg 也飘到 2.3°/s/轴 — filter 估得到但补偿不及时就炸了
-3. stereo 时间戳同步可能比 VINS-Fusion 更严格,10fps 下左右目 header 差值常超过 sqrtVINS 内部 sync tolerance,导致图像被丢
+**Bug #1(我的 config 错,已修)**:我在 `kalibr_imu_chain.yaml` 直接复用 VINS-Fusion config 的 `accelerometer_noise_density: 0.00558` 和 `random_walk: 0.00130`,但那些是 **g-unit/√Hz** 值(VINS 通过 `imu_acc_scale: 9.81` 内部 scale)。我的 `scale_imu.py` 已经把 `/handsfree/imu` acc × 9.81 republish 到 `/imu_scaled`,所以喂给 sqrtVINS 的是 m/s²,**噪声也必须 × 9.81**(改成 0.0547 / 0.01275)否则 filter 以为 acc 比实际精确 10×,过度信任导致 bias 估不准+立体三角化拒大批特征为 Negative depth。**这个修复是 neg depth 18633 → 99 的 97% 降的主因**。
 
-**open_vins(MSCKF,同 bag + 同标定) 0.76m 收敛**,说明calib 和 IMU 都没问题,**是 SR-VINS 这个后端的某个收敛约束在当前传感器组合下不合**。
+**Bug #2(sqrtVINS 上游 bug,未修)**:`ROS2Visualizer.cpp:595` 里
+```cpp
+double timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+```
+当 `sec=1.77e9`(Unix epoch 2026 年的值)时,float64 的 ~16 位有效数字导致 `nsec * 1e-9` 的后面 3-4 位被吃掉。800Hz IMU 样本间隔 1.25ms 虽然 > float64 分辨率(~128ns@1.7e9),但 v8 log 里出现 **1941 次 `Zero DT between IMU reading X and Y, removing it!`** — 说明 sqrtVINS 内部某条路径把 timestamp 收得更紧(可能到 1μs),导致大量 IMU 被误判重复剔除。同根的表现是 **`/poseimu` topic 输出的 header.stamp.nanosec 恒为 0**,只有 3 个唯一整秒值(1770885888 / ...6016 / ...6144),evo_ape 没法对齐 finder。
 
-**结论**:**不花更多本机时间调这个**。open_vins 已经作为 stereo-IMU 里 "ov_core 系" 的代表给了 0.76m,sqrtVINS 在本 bag 目前状态 🔴,构件(build + config + script)齐全落地留待:
-- 换数据(EuRoC V1 / Mars rover 这类"干净"场景)看是否一切如常 — 会区分"sqrtVINS 本身实现问题"vs"GeoScan 特别不合"
-- 或在 Spark 上启 `calib_imu_intrinsics: true` + `init_dyn_use: true` 深调(更多 CPU 空间)
+**v8 状态**:filter 确实 init 起来并跑完整 bag 输出 3881 poses,**前 100 poses 看起来合理**(x=0→19m, y=0→-24m, z=0→-18m 缓步 drift,和 GeoScan 实际运动吻合),但 ~pose 500 后开始发散到 km 级。和 Bug #2 累积相符 — 时间戳精度损使 IMU bias 估不准,慢速误差积到后期爆出。
+
+**open_vins(MSCKF,同 bag + 同标定) 0.76m 收敛**,说明 open_vins 的 ov_core fork 不踩 Bug #2(或者 MSCKF 对时间戳精度损容忍度更高),而 sqrtVINS fork 的 SR 后端对 IMU DT 精度敏感。
+
+**结论**:**Bug #2 是源码级问题,上游 fix 才能上 benchmark 分数**。预修路线:把 `timestamp (double)` 改成 `rclcpp::Time` 或 `uint64_t` 纳秒整数再做 dedup 比较。不是本项目 scope,本机 🔴 归档。open_vins 已代表 "ov_core 家族"给 0.76m,sqrtVINS 的 paper 优势要在别的数据集(EuRoC 的 IMU 时间戳 epoch 是 ~1.4e8,精度够,不会中招)看。
 
 ### 2026-04-22 — gsplat offline 3DGS 收尾(L1+SSIM + 30k iter)🟢
 
