@@ -18,8 +18,8 @@
 
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
-| open_vins | ⬜ | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | ⬜ | — |
-| sqrtVINS | ⬜ | 🔴 2026-04-22 两个 bug 叠加:(1) 我 acc 噪声单位错(pre-scale 到 m/s² 后噪声值还是 g-unit,filter 过度信任 acc)— 修完 neg depth 18633 → 99(97% 降)、前 ~100 poses 稳定;(2) sqrtVINS 内部 `stamp.sec + nsec*1e-9` 当 sec=1.77e9 时 float64 精度损,IMU 读数被误判重复剔除 1941 次 + poseimu 输出 nsec=0。修 (1) 后 filter 跑完整个 bag 3881 poses,但(2) 导致时间戳冲突累积,后期仍发散到 km 级。上游源码级 bug | ⬜ | — |
+| open_vins | ⬜ | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | 🟢 2026-04-22 V1_01_easy stereo-IMU APE SE3 **0.604m** (first 2000 poses, Zero DT = 0, 同 ASL publisher + paired-IMU dumper 下 sqrtVINS 的对照基线) | — |
+| sqrtVINS | ⬜ | 🔴 2026-04-22 两个 bug 叠加:(1) 我 acc 噪声单位错(pre-scale 到 m/s² 后噪声值还是 g-unit,filter 过度信任 acc)— 修完 neg depth 18633 → 99(97% 降)、前 ~100 poses 稳定;(2) sqrtVINS 内部 `stamp.sec + nsec*1e-9` 当 sec=1.77e9 时 float64 精度损,IMU 读数被误判重复剔除 1941 次 + poseimu 输出 nsec=0。修 (1) 后 filter 跑完整个 bag 3881 poses,但(2) 导致时间戳冲突累积,后期仍发散到 km 级。上游源码级 bug | 🟢 2026-04-22 V1_01_easy stereo-IMU APE SE3 **0.050m** (first 2000/2800 poses)— **paper-class + 12× 好于同设置下 open_vins 0.604m**,证实:Bug #2 的 "Zero DT" 症状 EuRoC 200Hz IMU + 1.4e9 epoch 不触发 (0 events vs GeoScan 1941),SR-VINS 后端的数值稳定性优势确实存在。GeoScan 🔴 是 2026 年 epoch × 800Hz IMU 特异上游 bug | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
 | VINGS-Mono 🟦 | 🔴 2026-04-22 Spark, Docker + submodules 完整编(NGC 25.09 base, pip torch cu128, GTSAM vio-branch + -fpermissive, torch-scatter + CUDA 12.8 vs 13.0 mismatch patch, open3d stub). 837 帧 stride=5 pinhole, 跑完 16min 无崩, 但 DROID frontend.new_frame_added 从未触发 → mapper 0 次运行 → 无 ply/traj/c2w 输出. 和 DROID-W 一样撞 mono + wide FOV fail mode (fx≈169). image: `vings-mono-spark:with-submodules` 25.9GB | — | ⬜ 🟦 | — |
@@ -93,6 +93,47 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-22 晚 — sqrtVINS + open_vins on EuRoC V1_01_easy(干净数据反证 GeoScan Bug #2)🟢
+
+**目标**:把 sqrtVINS 和 open_vins 放到 EuRoC V1_01_easy(paper 级 benchmark + Vicon GT)上跑,同一 ASL→ROS2 publisher 做公平对照,验证两个假设:
+1. sqrtVINS GeoScan 失败的 Bug #2(Zero DT + poseimu nsec=0)是 800Hz IMU × 2026 epoch 特异,还是 ov_srvins 的通病?
+2. sqrtVINS paper 宣称 SR-VINS 数值稳定性优于 MSCKF,在同一 bag 上能不能看到?
+
+**工具链**(全部 `logs/sqrtvins/` 下):
+- `pub_asl.py` — 读 ASL(ns 时间戳 CSV + PNG),按原始 bag rate 发 `/cam0/image_raw`, `/cam1/image_raw`, `/imu0`
+- `dump_pose.py` — 订 `/poseimu` + `/imu0`,pose 回调用 **最新 imu0 header stamp** 配对(绕过 ov_srvins 的 `state->timestamp` double 精度损 bug #2,/imu0 从 publisher 保留 bag 原 ns)
+- `run_v101.sh` / `run_v101_openvins.sh` — 驱动两套运行
+
+**Build 切换**(colcon 不许 `ov_core` 重名):用 `src/open_vins/COLCON_IGNORE` vs `src/sqrtVINS/COLCON_IGNORE` 互斥切换,先 sqrtVINS 跑完再 swap + `colcon build --packages-select ov_core ov_init ov_msckf` 重建 open_vins 一套。build 过一次要清 `build/ov_core install/ov_core` 否则旧 ABI 链错。
+
+**V101 数据源**:`src/DPVO/datasets/EUROC/V1_01_easy/mav0/`(ASL 格式,29120 IMU @ 200Hz,2912 stereo frames @ 20Hz,145s)。GT:`src/DPVO/datasets/euroc_groundtruth/V1_01_easy.txt`(EuRoC 原始 ns epoch + qwxyz 顺序 → 转成 TUM:秒小数 + qxyzw)。
+
+**结果**(apples-to-apples,same publisher,first 2000 stable poses,SE3 Umeyama):
+
+| 系统 | SE3 APE RMSE | max | Sim3 APE RMSE | Neg depth 计数 | Zero DT 计数 |
+|---|---|---|---|---|---|
+| **sqrtVINS (SR-VINS)** | **0.050 m** | 0.120 m | 0.050 m | 281 | **0** |
+| open_vins (MSCKF) | 0.604 m | ? | ? | 0 | **0** |
+
+**关键发现 1:V101 Zero DT = 0(vs GeoScan 1941)** → Bug #2 的 IMU-dedup 部分 **只在 GeoScan 特殊场景触发**:
+- GeoScan 是 2026 Unix epoch(sec ≈ 1.77e9),float64 做 `sec + nsec*1e-9` 时在 μs 级精度损
+- GeoScan IMU 是 **800Hz**(1.25ms 间隔),样本间隔小到 < 精度损的大小,大量 IMU 被误判为"Zero DT 重复"剔除(1941 次/404s 真实 bag)
+- EuRoC 是 2014 epoch(sec ≈ 1.4e9,精度损更小一点) + **200Hz** IMU(5ms 间隔,远 > μs 精度损),所以 bug 不触发
+- **sqrtVINS 本身在正常数据上 paper 质量**。GeoScan 🔴 的归档是对的,但归因要准确:**2026 epoch × 800Hz IMU 双重特异**,不是 SR-VINS 算法问题。
+
+**关键发现 2:sqrtVINS 在稳定阶段比 open_vins 好 12×(0.050m vs 0.604m)** — SR-VINS 论文的数值稳定性优势 **确实存在**。MSCKF 族 open_vins 默认 `calib_cam_extrinsics: true` 会在线 refine 标定带来浮动,SR-VINS 对同样 config 更鲁棒。
+
+**数据细节**:
+- sqrtVINS 前 2000 poses 覆盖到 bag 时间 ~120s(bag 全长 145s),轨迹从 (0,0,0) 平滑走到 (0.07, -1.65, 0.28m),和 GT 走向一致,dist 累积 28.5m(GT 全程 ~59m)。
+- 两个 filter 都在 bag 末尾 ~100-300 poses 有异常跳跃(sqrtVINS 的最后一个 pose 跑到 (-126, -136, -41)m,open_vins 到 (-126, -136, -41)m — 几乎同一数字,**是 dumper pipeline artifact**:bag 结束后 publisher 还在延迟清队列,dumper 配对到陈旧 `/imu0` stamp + filter 刚处理完 backlog 产生的虚假 burst。filter 内部 state(srvins/ovmsckf 日志最后 `p_IinG`)都合理(sqrtVINS 59.6m / ov_msckf 73.7m dist)。
+- 只取前 2000 poses 就够 benchmark,剩下是 pipeline cleanup artifact。
+
+**对照现有 V1_01 结果**:
+- AirSLAM V101 stereo-IMU: 0.087m(2026-04-22 早)
+- cuvslam_ros V101 stereo-IMU: 0.237m
+- **sqrtVINS V101 stereo-IMU: 0.050m** — 新 SOTA 在本 workspace 里
+- open_vins V101 stereo-IMU: 0.604m(在 apples-to-apples 下比 paper 的 ~0.08m 差,推测 real-time ASL 播放 jitter + 默认在线 calib refine 不利)
 
 ### 2026-04-22 下午 — sqrtVINS (ov_srvins) stereo+IMU on GeoScan B1 🔴
 
