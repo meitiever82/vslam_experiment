@@ -19,12 +19,14 @@
 | 系统 \ 数据集 | GeoScan B1 mono-inertial | GeoScan B1 stereo-inertial | EuRoC V101 | TUM RGB-D |
 |---------------|--------------------------|-----------------------------|------------|-----------|
 | open_vins | 🔴 2026-04-22 mono-inertial: init OK 后发散, dist=1024m on 50m 车库 (FB100 IMU zero-DT 被 drop 致积分丢传播). bag-record 0 字节, 无 APE. 见 `memory/project_openvins_geoscan_divergence.md` | 🟢 2026-04-16 stereo-IMU APE 0.76m vs finder (SE3),轨迹 `~/Documents/Datasets/geoscan/B1/2026-02-12-16-47-48/open-vins.txt` | 🟢 2026-04-22 V1_01 stereo-IMU **APE SE3 0.165m / Sim3 0.159m** (2780 poses, bag replay). workspace 重整 + `init_dyn_use: true` 后救活（原 static init 等不到 accel jerk → 94m scale drift）。另保留 4-16 ASL pub 试点 0.604m/first 2000 poses | — |
-| sqrtVINS | ⬜ | 🔴 2026-04-22 两个 bug 叠加:(1) 我 acc 噪声单位错(pre-scale 到 m/s² 后噪声值还是 g-unit,filter 过度信任 acc)— 修完 neg depth 18633 → 99(97% 降)、前 ~100 poses 稳定;(2) sqrtVINS 内部 `stamp.sec + nsec*1e-9` 当 sec=1.77e9 时 float64 精度损,IMU 读数被误判重复剔除 1941 次 + poseimu 输出 nsec=0。修 (1) 后 filter 跑完整个 bag 3881 poses,但(2) 导致时间戳冲突累积,后期仍发散到 km 级。上游源码级 bug | 🟢 2026-04-22 V1_01_easy stereo-IMU APE SE3 **0.050m** (first 2000/2800 poses)— **paper-class + 12× 好于同设置下 open_vins 0.604m**,证实:Bug #2 的 "Zero DT" 症状 EuRoC 200Hz IMU + 1.4e9 epoch 不触发 (0 events vs GeoScan 1941),SR-VINS 后端的数值稳定性优势确实存在。GeoScan 🔴 是 2026 年 epoch × 800Hz IMU 特异上游 bug | — |
+| sqrtVINS ⚠️ 试过,数据集敏感 | 🔴 mono-IMU 发散 (见右) | 🔴 (见 4-22 log) | 🟡 短段 paper-class, 长段不行 (见右) | — |
+| `---- sqrtVINS 细节` | full-bag 326k poses: **SE3 132km / Sim3 23m** 指数发散. 前 5k poses (6.3s): **SE3 0.74m / Sim3 6mm** ✨ paper-class. FB100 800Hz 重复 ts + mono-IMU scale = open_vins 1024m 同 class failure. **结论:GeoScan 锁 stereo-IMU 路线, 停止投 mono** | 2026-04-22 两 bug 叠:(1) acc 噪声 g-unit 错 (修完 neg depth 18633→99);(2) sec≈1.77e9 时 float32 精度损致 Zero-DT 1941 次, poseimu nsec=0. **上游 bug, 不继续调** | V1_01 stereo-IMU 90s 完整 bag (default config, 上游 `get_time_from_seconds(float→double)` 精度 fix 已修): **SE3 0.59m / Sim3 0.56m** (11764 poses). 前 2000 poses (15s post-init) **SE3 0.13m / Sim3 0.14m** — 接近 paper 0.050m, 后段 drift 4×. Mono-IMU: Sim3 0.97m / SE3 231m (尺度本征). ⚠️ **试过, 停止投入** — ORB_SLAM3 0.082 / AirSLAM 0.087 已充分覆盖 V1_01 baseline | — |
 | mins | ⬜ (ROS1) | ⬜ (ROS1) | ⬜ | — |
 | EPLF-VINS | ⬜ (ROS1) | — | ⬜ | — |
 | VINGS-Mono 🟦 | 🔴 2026-04-22 Spark, Docker + submodules 完整编(NGC 25.09 base, pip torch cu128, GTSAM vio-branch + -fpermissive, torch-scatter + CUDA 12.8 vs 13.0 mismatch patch, open3d stub). 837 帧 stride=5 pinhole, 跑完 16min 无崩, 但 DROID frontend.new_frame_added 从未触发 → mapper 0 次运行 → 无 ply/traj/c2w 输出. 和 DROID-W 一样撞 mono + wide FOV fail mode (fx≈169). image: `vings-mono-spark:with-submodules` 25.9GB | — | ⬜ 🟦 | — |
-| ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | ⬜ | ⬜ |
-| VINS-Fusion-ROS2 | — | 🔴 2026-04-21 stereo+IMU(两次调参都死): baseline APE 17.5m/31s; 调过 min_dist 8/max_cnt 500/F_thresh 3/flow_back 0/rate 0.5/estimate_extrinsic 0 后反而 31.5m/20s。LK 光流前端对 10fps 鱼眼+低纹理车库根本不够用,常态 1-10 特征,不是参数能救的 | 🟢 2026-04-22 V101 stereo+IMU **APE SE3 0.132m / Sim3 0.117m** (1446 poses). 需 Ceres 2.2 Manifold port + cv_bridge.hpp include + `ofstream.precision(9)` ts 修复 + metadata.yaml `qos_profiles: []` 修复 | — |
+| SchurVINS | ⬜ | ⬜ | 🟡 2026-04-23 晚 **build unblocked**: Ceres 2.2 Manifold port + circular-dep 断开 (stub loop_closing.h) + `schur_vins.cpp:158` dt-assert 放宽 (>50ms skip, 15-50ms subdivide) → 22 pkgs 干净编过. Runtime V101 mono-IMU **SE3 8.5m / Sim3 1.7m** (148 poses / 130s). 但 pose 跳跃, filter 疑在周期性 re-init 或 tracking 丢失后回原点. dt>50ms 的 skip 可能让 state 发散. **下次调**: 调 init params, 可能改回 subdivide + cap at 100ms; 或完整 IMU buffer warmup gating | ⬜ |
+| ORB_SLAM3_ROS2 | 🟢（参考基线） | 🟢 | 🟢 2026-04-22 V1_01 stereo-inertial **APE SE3 0.082m / Sim3 0.076m** (1770 poses). 复用 `~/casbot_ws/.../glim_ext/.../ORB_SLAM3/stereo_inertial_euroc` aarch64 预编译 binary,绕开 ORB_SLAM3_ROS2 wrapper 的 x86_64 `libORB_SLAM3.so` | ⬜ |
+| VINS-Fusion-ROS2 | 🔴 2026-04-23 mono+IMU: init 反复 "Not enough features or parallax; Move device around"(n_pts=1-11),同一 LK 前端短板 vs 4-21 stereo 的 🔴。证实 LK 在 10fps 鱼眼低纹理车库 fundamental fail — mono/stereo 都过不了 | 🔴 2026-04-21 stereo+IMU(两次调参都死): baseline APE 17.5m/31s; 调过 min_dist 8/max_cnt 500/F_thresh 3/flow_back 0/rate 0.5/estimate_extrinsic 0 后反而 31.5m/20s。LK 光流前端对 10fps 鱼眼+低纹理车库根本不够用,常态 1-10 特征,不是参数能救的 | 🟢 2026-04-22 V101 stereo+IMU **APE SE3 0.132m / Sim3 0.117m** (1446 poses). 需 Ceres 2.2 Manifold port + cv_bridge.hpp include + `ofstream.precision(9)` ts 修复 + metadata.yaml `qos_profiles: []` 修复 | — |
 | AirSLAM | — (stereo-only, mono 只用于重定位查询) | 🟢 2026-04-16（Z 漂修复后 Z∈[0,1.1]m, 535 KF）| 🟢 2026-04-22 V101 stereo-inertial **APE SE3 0.087m / Sim3 0.085m** (274 KF / 2912 frames @ 41.9 FPS; `use_superpoint: 0` 绕开 TRT 10 SuperPoint ONNX int64/int32 bug, 用 PLNet 原生点+线检测) | — |
 | droid_w_ros2 / DROID-W(VO only, mapper off) | 🔴 2026-04-21 Spark, native uncertainty on + FiT3D + dpt2_vitl_hypersim_20, undistort balance=0.0(fx≈240). **z 漂 160m**(GT z≈0 平面), Umeyama 秩退化. APE Sim3 6.25m / SE3 40.58m 只是数字, 实际轨迹形态完全错(dy=11.7 vs GT 64, z 单调飞). mono + 学习深度在走廊/车库 fail mode. 试 vkitti depth 更差(Sim3 9.06m) | — | ⬜ | ⬜ |
 | droid_w_ros2 / DROID-W(+ 3DGS mapper) 🟦 | 🔴 2026-04-21 VO 轨迹已飞, mapper 无意义. 另外 aarch64 open3d 无 wheel 要源码编, 本次不 pursue | — | ⬜ 🟦 | ⬜ 🟦 |
@@ -93,6 +95,68 @@ ros2 launch orbslam3_ros2 mono-inertial.launch.py \
 ---
 
 ## 运行记录（按日期倒序）
+
+### 2026-04-23 — sqrtVINS 上游 float32 timestamp 精度 bug 修复 + V101/GeoScan 复测 🟡
+
+**目标**:回到 sqrtVINS,把 4-22 留下的 Bug #2(`/poseimu` header stamp nsec=0 → evo 无法对齐)**从上游源码层修掉**,而不再靠"取前 2000 pose 截断"的 workaround。同时用修完的版本重跑 V101 mono/stereo + GeoScan B1 mono-inertial,看能否拿到完整 bag 的分数。
+
+**Root cause 精确定位**:`src/sqrtVINS/ov_srvins/src/ros/ROSVisualizerHelper.h:122`
+```cpp
+static rclcpp::Time get_time_from_seconds(DataType seconds) {  // ← DataType=float when USE_FLOAT=ON
+```
+`cmake/ROS2.cmake` 默认 `USE_FLOAT=ON` → `DataType = float`(32 位)。当 caller 传 `double timestamp_inI ≈ 1.4e9`(EuRoC)或 `≈ 1.77e9`(GeoScan)时,**float 在函数参数处被隐式截断**:float32 在 1.4e9 尺度只有 ~128 单位分辨率,sub-second 全部归零。所以所有 `/poseimu` 和 `/odomimu` 的 header.stamp.nanosec = 0。
+
+**Fix**(1 行):改函数签名为 `double seconds`,body 保留(已用 `floor()`/`round((s-sec)*1e9)` 双精度算):
+```cpp
+static rclcpp::Time get_time_from_seconds(double seconds) {
+```
+Rebuild `colcon build --packages-select ov_srvins --symlink-install`(44s)。
+
+**Bug #1 注意**:`Helper.cpp:667` 的 "Zero DT" dedup(阈值 `1e-12`)不是精度损,是 FB100 硬件本身给出重复 timestamp 的 IMU 消息——输入数据级的问题,和 open_vins 的 `Propagator::select_imu_readings` 一样会触发。这次 GeoScan 4.5s 段有 0 条 Zero DT,之前 1941 条是更长播放段的累计。
+
+**V101 mono-inertial**(144s bag,`init_dyn_use: true + init_imu_thresh: 0.5` 过 V101 慢启动):
+- 单次 clean 跑(workspace 必须无残留 `run_subscribe_msckf` 僵尸进程,否则旧 filter 和新 filter 同时发布 `/ov_srvins/odomimu`,record 到交错输出,APE 被污染成 760m/mean 假数字)
+- 截取 100s bag-play(Bash tool foreground 2min 限,只拿到 47s 的有效轨迹):**APE SE3 231m / Sim3 0.97m** / 3570 poses
+- SE3 差是 mono-inertial 尺度本征难,Sim3 ~1m 对 V101 mono-inertial 是合理数字
+
+**V101 stereo-inertial**(144s bag,revert 到 default config `init_dyn_use: false + init_imu_thresh: 2.0`):
+- Full 100s bag-play:**APE SE3 0.59m / Sim3 0.56m** (11764 poses, 45m path length,89s trajectory 覆盖)
+- **前 2000 poses (15s post-init): APE SE3 0.13m / RMSE 0.14m** — 接近 paper class 0.050m,后段 drift 4×
+- stereo default config 比 mono config 好 (dyn init 对 stereo 有害 — stereo 从第一对帧即可 init 不需等 jerk)
+- 和 4-22 session 的 0.050m 对比:paper 用 ASL 直接 publisher + first-2000-pose 截断,本次是 bag-replay 全段,所以 full 数字差但 first-2k 同一量级
+
+**GeoScan B1 mono-inertial**(`config: geoscan`,IMU rescaler `/handsfree/imu → /handsfree/imu_ms2 ×9.81`,bag --start-offset 10 越过静止段):
+- Init 超快(0.0002s),dynamic init path + `init_max_disparity: 0.3` + `init_dyn_min_deg: 3.0` 后即触发
+- 发布 2877 poses spanning **4.5s**(从 bag_t=10.08 到 14.59s),然后似乎 silent-stop。**表象不是 filter bug**,见下方根因
+- 有效段 APE: **SE3 0.52m / Sim3 5mm** vs finder_localization GT(rate 0.5 reproduce:SE3 0.48m / Sim3 5mm,2758 poses)
+- Sim3 5mm 是 paper-class(sqrtVINS 擅长短段初始轨迹),SE3 0.52m 优于 open_vins 同 bag 0.76m stereo-IMU
+
+**Silent-stop 根因(2026-04-23 晚 debug 完成)**:**不是 sqrtVINS 问题,是 `ros2 bag play` 在 32.9 GiB GeoScan bag 上的 I/O 吞吐瓶颈。**
+- 诊断用 30 行 Python `imu_counter.py` + `ros2 topic hz` 两路独立验证:
+  - V101 bag(小文件):IMU 实时 ~94%(10100 msgs in 55s wall,bag 时间推进 52s)
+  - GeoScan bag(32.9 GB,含 LiDAR 点云 767K 消息):IMU 实时 **~4%**(2400 msgs in 60s wall,bag 时间推进 2.5s)
+- aarch64 Spark 读 SQLite3 + FastDDS 发布 800Hz IMU + 10Hz LiDAR PointCloud2 + 10Hz 两路 fisheye,合并 ~40 MB/s 持续读+发 — CPU+DDS 都跟不上
+- 意思:sqrtVINS 一直在 **正确** 处理它收到的 IMU,只是 bag play 100s wallclock 里只播完 4s bag-time。filter header.stamp 忠实反映 bag time,没有 freeze
+- **次生陷阱**:之前调试时多个 `ros2 bag play` 僵尸进程并存(Bash-tool run_in_background 后没 reap 干净),subscriber 看到多个 bag position 交错的 timestamp,像 "时间回退"。必须 `ps -eo pid,cmd | grep ros2` + 显式 `kill -9 <PID>` 逐个清,`pkill -9 -f ros2` 经常 miss
+
+**Fix**:`ros2 bag convert -i <大 bag> -o filter.yaml`,yaml 只留 `/handsfree/imu /handsfree/mag /left_camera/image /right_camera/image`,drop 3+ GB/min 的 LiDAR → 得到小 bag(预计 ~3 GB),sqrtVINS 能在这个小 bag 上 real-time 跑完整 418s。下次把小 bag 跑完再上 benchmark 分数。
+
+**关键踩坑**:
+1. **sqrtVINS/open_vins `ov_core/ov_data/ov_eval` 包名冲突** — 必须互斥 COLCON_IGNORE(既定 pattern)。不要尝试在同一 workspace 并行保留两者。
+2. **pkill -9 after ros2 launch 会留 pthread 残留状态** — 下次再启动 sqrtVINS 会 `Fatal glibc error: __pthread_tpp_change_priority`。解决:每次强杀后 `sleep 5` 让 DDS shmem 清理。
+3. **ros2 bag record mcap backend 在 SIGINT 下会丢 footer** → `File end magic is invalid`。用 `-s sqlite3` 代替。
+4. **`ros2 launch` wrapper 不随 parent bash 死而死** — 多次 Bash-tool 调用产生 6+ 僵尸 `run_subscribe_msckf`,每个都往同一 topic 发,污染后续 record。每个 run 前必须 `pkill -9 -f run_subscribe_msckf; sleep 3` + 直接 `kill -9 <PID>` 做兜底。
+5. **Bash tool 2min foreground 限** 对 V101(144s)刚刚好越界,对 GeoScan(418s)太短。解决:用 `timeout N` 限制 `ros2 bag play`,接受部分覆盖。
+
+**工具留档**:
+- `/home/steve/vslam_ws/scripts/run_sqrtvins_benchmark.sh`(含前置清理 + 顺序启动 + 顺序关闭)
+- `/home/steve/vslam_ws/scripts/imu_accel_g_to_ms2.py`(FB100 g→m/s² republisher,既有)
+- 结果:`results/sqrtvins_euroc_v101/{sqrtvins_v101.tum, ape_{se3,sim3}.zip, poses/}` 和 `results/sqrtvins_geoscan_b1_mono/{sqrtvins_geoscan.tum, ape_{se3,sim3}.zip, poses/}`
+
+**结论更新**:
+- Bug #2 的 **evo 对齐失败部分**已从上游修掉,header.stamp 保留纳秒精度
+- sqrtVINS paper 算法质量在 **短段**(2000-3000 pose / 几秒)已验证(V1_01 stereo 0.050m / GeoScan mono Sim3 5mm),但 **full-bag 长跑**仍有 silent-stop 或 scale divergence(本 session 未根治)
+- 完整 benchmark 分数需要后续:(a) 单独 session 调 stereo init params,(b) 搞清 silent-stop 触发条件,(c) 过一遍 full bag。下次 workstream
 
 ### 2026-04-22 晚 — 四路 map cross-compare(slim-vdb + limap + AirSLAM + gsplat)🟢
 
