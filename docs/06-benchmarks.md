@@ -43,7 +43,7 @@
 | limap（3D 线后处理，非 SLAM） | — | 🟢 2026-04-16 finder VIO + BA hybrid 出 280 条 nv≥4（14× 纯 VIO，2.4× 纯 SfM） | ⬜ | — |
 | slim-vdb（LiDAR+cam+VIO 语义体素） | — | 🟢 2026-04-18 1381 帧 stride3, 296万点云, 82×75×16m, Cityscapes-19 语义 | ⬜ | — |
 | gsplat offline 3DGS（cam0 + finder pose） | 🟢 2026-04-22 300 帧 / L1+0.2·SSIM / 30k iter / 165k 高斯 / 348s / VRAM 1.25GB / **PSNR 25.43dB, SSIM 0.85**(真实 MSE,v4 的 L1-近似 PSNR~33 不可比,同 PLY 重算真实 24.72/0.84)。2026-04-22 晚试了 AirSLAM 47k map points SfM init:**反而 24.37/0.84(略差)**,对齐 Sim3 RMSE 2.1m(AirSLAM 10% scale bias)系统性 ~2m 位置偏移让 densify 要花力气纠回 — 证明 SfM init 质量门槛高,下次用 COLMAP SfM 试 | — | — | — |
-| GLIM LIO + dpvo_frontend(Scheme C 紧耦合) | 🟢 2026-04-21 早:用 Python bag_replay_monotone.py 绕开 ros2 bag play 的时序 bug,**baseline 1.88m vs +DPVO 0.73m(SE3),RMSE 提升 2.6×**(不同段对照,但趋势明确) | — | — | — |
+| DPVO↔GLIM Bridge(Scheme C,松耦合;**非** DPVIO) | 🟢 2026-04-21 全段 408s 定版(详见 [07-dpvo-glim-bridge.md](07-dpvo-glim-bridge.md)):baseline **Sim3 1.68m / SE3 2.51m**(3379 poses)vs **v6 rotation-only + global=false: Sim3 0.96m / SE3 2.17m**(3951 poses,vision 帮 43%/13%)。v2 6-DoF 反劣化 60%,v4/v5 NaN,v6 是唯一胜出配置。2026-05-12 重建包 `src/dpvo_glim_bridge/` | — | — | — |
 | GLIM LIO + cam0 RGB 彩色点云(在线 Option A) | 🟢 2026-04-21 `colored_cloud_node.py` 实时投影 LiDAR→fisheye cam0 发 `/colored_cloud`,`colored_cloud_to_ply.py` 累积落 PLY。113s bag 段 1.36M 点 / 20MB,`runs/geoscan_colored/geoscan_b1_glim_colored.ply` | — | — | — |
 
 > 单元格内容示例：`🟢 ATE 0.28m / CPU 42%` 或 `🔴 IMU init 失败，见 §2.3`
