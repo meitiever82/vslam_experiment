@@ -28,6 +28,7 @@
 | DPVO↔GLIM Bridge(Scheme C,松耦合)| [07-dpvo-glim-bridge.md](07-dpvo-glim-bridge.md) | DPVO 单目作 BetweenFactor 进 GLIM factor graph 的方案选型 + v2-v6 实验 + 0.96m 定版;`src/dpvo_glim_bridge/` 重建包。**注:不是真 DPVIO** |
 | 真 DPVIO 设计(IMU 进 DPVO 内核)| [08-dpvio-design.md](08-dpvio-design.md) | 在 `dpvo/ba.py` Python BA 加 IMU preintegration factor,gravity 联合优化,产 metric-scale pose。9 阶段 13-19 天工程量评估,代码家 `src/dpvio/`(待建)|
 | DPVO 代码级深度分析(5 篇)| [dpvo/](dpvo/) | codebase-analysis-skill 出品:00-overview / 01-data-structures / 02-data-flow / 03-algorithms(BA Schur 推导)/ 04-key-functions(逐行)。90 个 [VERIFY:] tag 全部对得上行号 |
+| 后端优化谱系:因子图 vs 可微 BA | [09-ba-optimization-spectrum.md](09-ba-optimization-spectrum.md) | 跨库技术脉络:GTSAM/gtsam_points(因子图,Schur补+Cholesky,激光GPU边界)→ PyPose/bae(可微但真解,bae 是 pypose 稀疏后端)→ DPVO(真解 2×GN+Schur)→ BA-T(不解,Transformer 模仿 Schur 补信息流)。含 BA-Net 共同祖先谱系图 + 可微vs因子图优劣势 + 选型 |
 | Benchmark 迁移 SOP | [PLAN-benchmark-machine-setup.md](PLAN-benchmark-machine-setup.md) | 把 benchmark 环境搬到另一台机器的标准流程 |
 
 > **建图主力 `rtabmap`** 见 `~/rtabmap_ws/docs/overview.md`。
