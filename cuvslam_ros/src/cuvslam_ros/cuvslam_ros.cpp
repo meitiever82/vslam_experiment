@@ -520,8 +520,8 @@ void CuvslamROS::stereo_callback(
     try {
       cuvslam::Odometry::State state;
       odometry_->GetState(state);
-      cuvslam::Pose slam_pose = slam_->Track(state);
-      estimate.world_from_rig.value().pose = slam_pose;
+      slam_->Track(state);
+      estimate.world_from_rig.value().pose = slam_->GetPose();
     } catch (const std::exception& e) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
         "SLAM track failed: %s", e.what());
@@ -595,8 +595,8 @@ void CuvslamROS::mono_callback(const sensor_msgs::msg::Image::ConstSharedPtr& im
     try {
       cuvslam::Odometry::State state;
       odometry_->GetState(state);
-      cuvslam::Pose slam_pose = slam_->Track(state);
-      estimate.world_from_rig.value().pose = slam_pose;
+      slam_->Track(state);
+      estimate.world_from_rig.value().pose = slam_->GetPose();
     } catch (const std::exception& e) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
         "SLAM track failed: %s", e.what());
@@ -831,7 +831,7 @@ void CuvslamROS::log_slam_status() {
 
 void CuvslamROS::publish_odometry(const cuvslam::PoseEstimate& estimate, const rclcpp::Time& stamp) {
   const auto& cv_pose = estimate.world_from_rig.value().pose;
-  const auto& cov = estimate.world_from_rig.value().covariance;
+  const auto& cov = estimate.world_from_rig.value().covariance_xyz_rpy;
   auto ros_pose = opencv_to_ros_pose(cv_pose);
 
   // nav_msgs/Odometry
